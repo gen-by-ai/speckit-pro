@@ -1,0 +1,91 @@
+schema_version: "1.0"
+
+extension:
+  id: "pro"
+  name: "SpecKit Pro"
+  version: "1.0.0"
+  description: "Autonomous long-run orchestration: full SDD pipeline with configurable gates, self-healing loops, session persistence, and rich progress tracking"
+  author: "speckit-pro"
+  repository: "https://github.com/github/spec-kit-pro"
+  license: "MIT"
+  homepage: "https://github.com/github/spec-kit-pro"
+
+requires:
+  speckit_version: ">=0.8.0"
+  tools:
+    - name: git
+      required: false
+      version: ">=2.0.0"
+
+provides:
+  commands:
+    - name: speckit.pro.run
+      file: commands/speckit.pro.run.md
+      description: "Full autonomous SDD pipeline: specify → clarify → plan → tasks → analyze → implement with configurable human gates"
+      aliases: ["speckit.pro.go"]
+
+    - name: speckit.pro.loop
+      file: commands/speckit.pro.loop.md
+      description: "Autonomous implementation loop — single iteration worker invoked by the orchestrator script"
+
+    - name: speckit.pro.status
+      file: commands/speckit.pro.status.md
+      description: "Rich status dashboard showing current phase, task progress, session history, and health"
+
+    - name: speckit.pro.resume
+      file: commands/speckit.pro.resume.md
+      description: "Resume an interrupted autonomous run from the last saved session checkpoint"
+
+    - name: speckit.pro.checkpoint
+      file: commands/speckit.pro.checkpoint.md
+      description: "Create a named checkpoint: commit all changes, save session snapshot, log progress"
+
+    - name: speckit.pro.compress
+      file: commands/speckit.pro.compress.md
+      description: "Compress and summarize spec artifacts to reduce context token usage during long autonomous runs"
+
+  config:
+    - name: "pro-config.yml"
+      template: "pro-config.template.yml"
+      description: "SpecKit Pro configuration: gates, loop behavior, model, quality settings"
+      required: false
+
+hooks:
+  after_tasks:
+    command: speckit.pro.checkpoint
+    optional: true
+    prompt: "Create a Pro checkpoint after task generation?"
+    description: "Save a named checkpoint after tasks are generated, before implementation"
+    condition: null
+
+tags:
+  - "autonomous"
+  - "orchestration"
+  - "loop"
+  - "productivity"
+  - "process"
+  - "long-run"
+  - "self-healing"
+
+defaults:
+  autonomous:
+    enabled: true
+    full_pipeline: false
+  gates:
+    after_specify: true
+    after_clarify: false
+    after_plan: true
+    after_tasks: false
+    after_analyze: false
+    after_implement: false
+  loop:
+    max_iterations: 20
+    max_consecutive_failures: 3
+    checkpoint_frequency: 3
+    implement_phases: true
+  quality:
+    run_clarify: true
+    run_analyze: true
+    run_checklist: false
+  model: "claude-sonnet-4.6"
+  agent_cli: "copilot"

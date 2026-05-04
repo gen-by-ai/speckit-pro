@@ -1,0 +1,95 @@
+# SpecKit Pro Configuration
+# Copy to .specify/extensions/pro/pro-config.yml and customize.
+# ─────────────────────────────────────────────────────────────────────────────
+# Priority order (highest wins):
+#   1. Environment variables (SPECKIT_PRO_*)
+#   2. Local overrides (.specify/extensions/pro/pro-config.local.yml — gitignored)
+#   3. This project config (.specify/extensions/pro/pro-config.yml)
+#   4. Extension defaults (extension.yml → defaults)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Autonomous Pipeline Settings ─────────────────────────────────────────────
+autonomous:
+  # Whether to run the full pipeline in autonomous mode by default.
+  # When false, /speckit.pro.run acts as a guided runner (shows plan, asks to confirm each step).
+  enabled: true
+
+  # Run the full pipeline (specify → clarify → plan → tasks → analyze → implement)
+  # Set to false if you only want to use /speckit.pro.loop for the implement phase.
+  full_pipeline: false
+
+# ── Human Review Gates ────────────────────────────────────────────────────────
+# true  = pause and wait for human review after this phase completes
+# false = automatically proceed to next phase
+gates:
+  after_specify: true      # Recommended: always review the spec
+  after_clarify: false     # Usually safe to auto-proceed
+  after_plan: true         # Recommended: review tech plan before tasks
+  after_tasks: false       # Usually safe to auto-proceed
+  after_analyze: false     # Auto-proceed if analyze passes
+  after_implement: false   # Auto-proceed (run /speckit.pro.status to review)
+
+# ── Quality Settings ─────────────────────────────────────────────────────────
+quality:
+  # Run /speckit.clarify after /speckit.specify
+  run_clarify: true
+
+  # Run /speckit.analyze after /speckit.tasks (before implement)
+  run_analyze: true
+
+  # Require all checklists to be complete before implement
+  # (uses standard SpecKit checklist gate logic)
+  require_checklist: false
+
+  # Abort implement loop if analyze finds CRITICAL issues
+  abort_on_critical_analysis: true
+
+# ── Autonomous Loop Settings ──────────────────────────────────────────────────
+loop:
+  # Maximum number of agent iterations before stopping
+  # Each iteration handles one "work unit" (phase section or task group)
+  max_iterations: 20
+
+  # Number of consecutive failures before circuit breaker triggers
+  max_consecutive_failures: 3
+
+  # Create a checkpoint commit every N iterations
+  checkpoint_frequency: 3
+
+  # Whether to implement one full phase per iteration (true)
+  # or one task group (false — more granular but more iterations)
+  implement_phases: true
+
+# ── Context Compression ───────────────────────────────────────────────────────
+context:
+  # Auto-compress spec artifacts before starting the implement loop
+  auto_compress: false
+
+  # Iteration threshold: use context-summary.md instead of full artifacts
+  # after this many iterations (to manage context window)
+  compression_threshold: 5
+
+# ── Model & Agent Settings ───────────────────────────────────────────────────
+# AI model to use for autonomous iterations
+# Common values: claude-sonnet-4.6, gpt-4.1, gemini-2.5-pro, claude-opus-4-5
+model: "claude-sonnet-4.6"
+
+# Agent CLI binary name or path
+# Supported: copilot, claude, gemini, codex, cursor
+# Env override: SPECKIT_PRO_AGENT_CLI
+agent_cli: "copilot"
+
+# ── Checkpoint Settings ───────────────────────────────────────────────────────
+checkpoint:
+  # Prefix for auto-generated commit messages
+  commit_prefix: "[Pro]"
+
+  # Include feature name in checkpoint commit messages
+  include_feature_name: true
+
+# ── Notification Settings ─────────────────────────────────────────────────────
+# (Future: webhook/notification integration)
+notify:
+  on_complete: false
+  on_failure: false
+  # webhook_url: "${SPECKIT_PRO_WEBHOOK_URL}"
