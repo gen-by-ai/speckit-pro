@@ -50,7 +50,7 @@ specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archiv
 ```bash
 git clone https://github.com/gen-by-ai/speckit-pro
 cd my-project
-specify extension add --dev /path/to/spec-kit-pro
+specify extension add --dev /path/to/speckit-pro
 ```
 
 ### Verify
@@ -380,7 +380,7 @@ SpecKit Pro auto-detects your installed agent CLI. Supported:
 ## Extension Structure
 
 ```
-spec-kit-pro/
+speckit-pro/
 ├── extension.yml                  # Extension manifest (SpecKit schema v1.0)
 ├── commands/
 │   ├── pro.go.md                  # → /speckit.pro.go  — thin pipeline runner
@@ -452,6 +452,6 @@ SpecKit Pro is built on the [Spec Kit extension system](https://github.com/githu
 
 ## License
 
-MIT © spec-kit-pro contributors. See [LICENSE](LICENSE).
+MIT © [gen-by-ai/speckit-pro](https://github.com/gen-by-ai/speckit-pro) contributors. See [LICENSE](LICENSE).
 
 Built on [GitHub Spec Kit](https://github.com/github/spec-kit) — MIT License.
