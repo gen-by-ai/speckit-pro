@@ -65,6 +65,19 @@ specify extension list
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
 
+### Updating
+
+To update to a newer release, remove the existing extension and re-add it:
+
+```bash
+specify extension remove pro
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.4.0.zip
+```
+
+Replace `v1.4.0` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
+
+> **Note:** Updating replaces the extension files in `.specify/extensions/pro/` but does **not** touch your feature spec directories — `AGENT.md`, `contracts/`, `evaluations/`, and `progress.md` are untouched.
+
 ---
 
 ## Quick Start
