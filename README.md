@@ -45,7 +45,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.4.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.6.0.zip
 ```
 
 ### From source (local dev)
@@ -60,7 +60,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.5.0)
+# ✓ SpecKit Pro (v1.6.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```

@@ -160,22 +160,114 @@ Updated: <ISO timestamp>
 These files live at the **project root** under `.ai-knowledge/<feature-slug>/` — not inside `.specify/`. They persist across extension updates and accumulate across the entire project lifetime.
 
 ### Phase 6 — Implement Loop
-Run the orchestrator script. Determine `SPEC_DIR` from the feature directory (found via the specify/tasks output or `session.md`):
 
-```bash
-.specify/extensions/pro/scripts/bash/pro-orchestrate.sh \
-  --feature-name "<feature-slug>" \
-  --tasks-path "<SPEC_DIR>/tasks.md" \
-  --spec-dir "<SPEC_DIR>" \
-  --ai-knowledge-dir "$PROJECT_ROOT/.ai-knowledge/<feature-slug>" \
-  --max-iterations <loop.max_iterations> \
-  --checkpoint-frequency <loop.checkpoint_frequency> \
-  --model "<model>" \
-  --agent-cli "<agent_cli>"
+> **You are the loop.** Do NOT try to run `pro-orchestrate.sh` — that script calls back into the agent CLI and cannot work inside VS Code Chat. Execute each iteration directly and keep going until all tasks are done or `<loop.max_iterations>` is reached.
+
+For each iteration N = 1, 2, 3 … up to `<loop.max_iterations>`:
+
+---
+
+**Print at the start of every iteration:**
+```
+[Pro] ── Iteration <N>/<max> ────────────────────────────────
 ```
 
-On macOS/Linux: use the bash script above.
-On Windows: use `.specify/extensions/pro/scripts/powershell/pro-orchestrate.ps1`.
+**1. Load context**
+
+If `<SPEC_DIR>/handoff.md` exists AND N > 1:
+- Load only `<SPEC_DIR>/handoff.md` and `<SPEC_DIR>/tasks.md` (lean context reset)
+
+Otherwise (first iteration or no handoff):
+- Load `<SPEC_DIR>/spec.md`, `<SPEC_DIR>/plan.md`, `<SPEC_DIR>/tasks.md`
+- Load last 10 entries of `<AI_KNOWLEDGE_DIR>/progress.md` (if file exists)
+- Load `<SPEC_DIR>/session.md` (if exists)
+
+Always load `<AI_KNOWLEDGE_DIR>/AGENT.md` if it exists — it contains project-specific commands and gotchas discovered in previous iterations.
+
+**2. Smoke test**
+
+If `<AI_KNOWLEDGE_DIR>/init.sh` exists, run it in the terminal:
+```bash
+bash <AI_KNOWLEDGE_DIR>/init.sh
+```
+- Exit 0 → note `[smoke-test: OK]` in the progress entry
+- Non-zero → fix the break before implementing new features, log the fix
+
+**3. Check completion**
+
+Count lines matching `- [ ]` in `tasks.md`. If zero: stop the loop and print the completion banner below.
+
+Count to show: `<completed>/<total> tasks (<N-1> iterations used)`.
+
+**4. Find next work unit & sprint contract**
+
+Find the first incomplete phase/section in `tasks.md` (a heading whose tasks still contain `- [ ]`).
+
+Check for `<AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md`:
+- If it exists: read it — implement against its acceptance criteria, not just the task list.
+- If it does NOT exist: create it now (see `pro.loop.md` Sprint Contract section for the required format). The contract is your commitment to the evaluator.
+
+**5. Implement**
+
+Implement all tasks in the work unit. For each task:
+- Write the code
+- Verify the acceptance criteria (including edge cases)
+- Mark the task `- [x]` in `tasks.md` immediately when done
+
+Follow the Scope of Autonomy rules from `pro.loop.md`: never delete files, never `git push`, never run `--force` commands.
+
+Signal underspecified requirements with `<pro-uncertainty>…</pro-uncertainty>` in the progress entry.
+
+**6. Append to progress log**
+
+Append to `<AI_KNOWLEDGE_DIR>/progress.md` (create with header if missing):
+
+```markdown
+## Iteration <N> — <ISO timestamp>
+**Work Unit**: <phase/section name>
+**Tasks completed**: <count this iteration>
+**Cumulative**: <completed>/<total> (<percentage>%)
+**Files modified**: <list>
+
+### Summary
+<2-3 sentences>
+
+### Decisions made
+<architectural/implementation decisions>
+
+### Issues encountered
+<problems, workarounds, deferred items>
+
+---
+```
+
+**7. Write handoff**
+
+Write `<SPEC_DIR>/handoff.md` (≤400 words). See `pro.loop.md` Handoff Artifact section for the exact required format. This replaces the full artifact load for the next iteration — keep it tight.
+
+**8. Checkpoint commit**
+
+If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete:
+```bash
+git add .
+git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)"
+```
+Log the commit hash in `<AI_KNOWLEDGE_DIR>/progress.md`.
+
+**9. Update AGENT.md**
+
+Review what you learned this iteration. If you discovered anything new about how to build, run, or test this project, append it to `<AI_KNOWLEDGE_DIR>/AGENT.md`. Keep each bullet under 20 words. This file is read at the top of every future iteration.
+
+**Print at the end of every iteration:**
+```
+[Pro] ── Iteration <N> complete — <completed>/<total> tasks ─
+```
+
+Then immediately begin iteration N+1 without waiting for user input. **Do not stop between iterations.**
+
+---
+
+The `pro-orchestrate.sh` script is the correct runner when invoked from a terminal (not VS Code Chat). It passes `--ai-knowledge-dir` to each loop invocation and handles circuit-breaking for long runs.
 
 ## Completion
 
