@@ -51,7 +51,9 @@ If these files are large (>3000 words), only read the sections relevant to the s
 
 ### 4. Generate the contract
 
-Write the contract to `<SPEC_DIR>/contracts/sprint-<N>.md` where N is the next sprint number (count existing contracts + 1).
+Write the contract to `<AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md` where N is the next sprint number (count existing contracts + 1).
+
+Derive `<AI_KNOWLEDGE_DIR>` as: `$(git rev-parse --show-toplevel)/.ai-knowledge/<feature-name>`. Create the directory if it doesn't exist: `mkdir -p "$AI_KNOWLEDGE_DIR/contracts"`.
 
 Contract structure:
 
@@ -107,7 +109,7 @@ This sprint is DONE when:
 
 ### 5. Create sprint pointer
 
-Write/update `<SPEC_DIR>/contracts/current.md` with a single line pointing to the latest contract:
+Write/update `<AI_KNOWLEDGE_DIR>/contracts/current.md` with a single line pointing to the latest contract:
 
 ```
 sprint-<N>
@@ -135,7 +137,7 @@ Print a summary:
 ║  Sprint: <N>                                              ║
 ║  Scope:  <phase name>                                     ║
 ║  Tasks:  <N tasks in scope>                               ║
-║  File:   <SPEC_DIR>/contracts/sprint-<N>.md               ║
+║  File:   <AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md          ║
 ╚═══════════════════════════════════════════════════════════╝
 
 CRITICAL criteria: <N>
@@ -143,5 +145,5 @@ MEDIUM criteria:   <N>
 LOW criteria:      <N>
 
 The evaluator will grade the next sprint against these criteria.
-Review: <SPEC_DIR>/contracts/sprint-<N>.md
+Review: <AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md
 ```

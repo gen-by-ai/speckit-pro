@@ -30,6 +30,14 @@ Parse the following from `$ARGUMENTS` (space-separated key=value pairs):
 | `iteration` | yes | Current iteration number (1-based) |
 | `max` | yes | Maximum iterations allowed |
 | `checkpoint-freq` | no | Commit every N iterations (default: 3) |
+| `ai-knowledge-dir` | no | Absolute path to `.ai-knowledge/<feature>` dir (default: derived from git root) |
+
+**Deriving `<ai-knowledge-dir>`** (when not passed explicitly):
+```bash
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/<feature>"
+```
+Create it if it doesn't exist: `mkdir -p "$AI_KNOWLEDGE_DIR"`
 
 ## Pre-Iteration Setup
 
@@ -44,16 +52,16 @@ Parse the following from `$ARGUMENTS` (space-separated key=value pairs):
    - `<spec-dir>/spec.md` — requirements and user stories
    - `<spec-dir>/plan.md` — technical architecture
    - `<spec-dir>/tasks.md` — task checklist with completion state
-   - `<spec-dir>/progress.md` — history of previous iterations (if exists, last 10 entries only)
+   - `<ai-knowledge-dir>/progress.md` — history of previous iterations (if exists, last 10 entries only)
    - `<spec-dir>/session.md` — session state (if exists)
 
-2. **Load `AGENT.md`** — if `<spec-dir>/AGENT.md` exists, read it. It contains learnings from previous iterations about how to build, run, and test this project. Always honour the commands and sequences it records.
+2. **Load `AGENT.md`** — if `<ai-knowledge-dir>/AGENT.md` exists, read it. It contains learnings from previous iterations about how to build, run, and test this project. Always honour the commands and sequences it records.
 
-3. **Run smoke test** — if `<spec-dir>/init.sh` exists, execute it:
+3. **Run smoke test** — if `<ai-knowledge-dir>/init.sh` exists, execute it:
    ```bash
-   bash <spec-dir>/init.sh
+   bash <ai-knowledge-dir>/init.sh
    ```
-   - If it exits non-zero, fix the break before implementing new features and log it in `progress.md` under `### Pre-iteration fix`.
+   - If it exits non-zero, fix the break before implementing new features and log it in `<ai-knowledge-dir>/progress.md` under `### Pre-iteration fix`.
    - If it exits zero, note `[smoke-test: OK]` in your progress entry.
 
 4. **Parse task state** — scan `tasks.md` for:
@@ -81,9 +89,9 @@ A "work unit" is defined as one of:
 
 **Before writing any code**, check for a sprint contract:
 
-1. Look for `<spec-dir>/contracts/sprint-<iteration>.md`
+1. Look for `<ai-knowledge-dir>/contracts/sprint-<iteration>.md`
 2. If it exists: read it — the acceptance criteria define what "done" means for this sprint. Implement against those criteria, not just the task descriptions.
-3. If it does NOT exist: create one at `<spec-dir>/contracts/sprint-<iteration>.md` using this structure:
+3. If it does NOT exist: create one at `<ai-knowledge-dir>/contracts/sprint-<iteration>.md` using this structure:
 
 ```markdown
 # Sprint Contract — Sprint <N>
@@ -153,12 +161,12 @@ The orchestrator logs these for the human operator without stopping the loop.
 
 If you encounter a blocker (cannot implement a task):
 - Leave the task as `- [ ]` with a note `<!-- BLOCKED: <reason> -->`
-- Log the blocker in `progress.md`
-- Output `<pro-status>BLOCKED:<task description></pro-status>` after completing other tasks
+- Log the blocker in `<ai-knowledge-dir>/progress.md`
+   - Output `<pro-status>BLOCKED:<task description></pro-status>` after completing other tasks
 
 ## Progress Tracking
 
-After implementing the work unit, append to `<spec-dir>/progress.md`:
+After implementing the work unit, append to `<ai-knowledge-dir>/progress.md`:
 
 ```markdown
 ## Iteration <N> — <ISO timestamp>
@@ -180,7 +188,7 @@ After implementing the work unit, append to `<spec-dir>/progress.md`:
 ---
 ```
 
-If `progress.md` does not exist, create it with this header first:
+If `<ai-knowledge-dir>/progress.md` does not exist, create it with this header first:
 
 ```markdown
 # Implementation Progress Log
@@ -240,19 +248,19 @@ If `iteration % checkpoint_frequency == 0` OR all tasks are complete:
 
 1. Stage all changes: `git add .`
 2. Commit: `git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)"`
-3. Log commit hash in `progress.md`
+3. Log commit hash in `<ai-knowledge-dir>/progress.md`
 
 If git is not available, skip with a warning.
 
 ## AGENT.md Self-Update
 
-After the checkpoint commit, review what you learned this iteration. If you discovered anything new about how to build, run, or test this project — commands, environment quirks, correct sequences — **update `<spec-dir>/AGENT.md`**:
+After the checkpoint commit, review what you learned this iteration. If you discovered anything new about how to build, run, or test this project — commands, environment quirks, correct sequences — **update `<ai-knowledge-dir>/AGENT.md`**:
 
 ```bash
 # Append a bullet under the relevant section. Keep it brief.
 ```
 
-Structure of `<spec-dir>/AGENT.md` (create if missing):
+Structure of `<ai-knowledge-dir>/AGENT.md` (create if missing):
 
 ```markdown
 # Project Agent Notes
@@ -274,6 +282,8 @@ Updated: <ISO timestamp>
 
 **Rules**: Never put status reports in `AGENT.md`. Keep each bullet under 20 words. Future agents will load this at the top of every iteration.
 
+> `AGENT.md`, `init.sh`, `contracts/`, `evaluations/`, and `progress.md` all live under `<project-root>/.ai-knowledge/<feature>/` — not inside `.specify/`. They persist across extension updates and accumulate knowledge over the entire project lifetime. `handoff.md` and `session.md` remain in `<spec-dir>/` as they are transient per-sprint state.
+
 ## Completion Signals
 
 Output **exactly one** of these terminal tags as the last line of output:
@@ -290,6 +300,6 @@ Output **exactly one** of these terminal tags as the last line of output:
 
 To maintain effectiveness across many iterations:
 - Focus only on the current work unit — do not re-read or re-implement previous phases
-- Keep `progress.md` entries concise (< 200 words per iteration)
+- Keep `<ai-knowledge-dir>/progress.md` entries concise (< 200 words per iteration)
 - Reference `spec.md` and `plan.md` for intent, not line-by-line
 - If context feels saturated, note it in progress.md with `<!-- Context: HIGH -->`

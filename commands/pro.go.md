@@ -105,9 +105,16 @@ If analyze reports CRITICAL issues, pause regardless of gate setting:
 
 ### Phase 5b — Initializer Setup
 
-Before the implement loop, ensure `<SPEC_DIR>/init.sh` exists. This script is how every future loop iteration verifies the app is still runnable before picking up new work.
+Before the implement loop, ensure `<AI_KNOWLEDGE_DIR>/init.sh` exists. This script is how every future loop iteration verifies the app is still runnable before picking up new work.
 
-**If `<SPEC_DIR>/init.sh` does not exist**, generate it now by reading `plan.md` to understand the tech stack. The script must:
+Derive `<AI_KNOWLEDGE_DIR>` now:
+```bash
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/<feature-slug>"
+mkdir -p "$AI_KNOWLEDGE_DIR"
+```
+
+**If `<AI_KNOWLEDGE_DIR>/init.sh` does not exist**, generate it now by reading `plan.md` to understand the tech stack. The script must:
 1. Start the development server (or compile the project)
 2. Run a basic smoke test (e.g., `curl http://localhost:PORT/health` or run the test suite with a short timeout)
 3. Exit `0` on success, non-zero on failure
@@ -129,9 +136,9 @@ echo "Smoke test: OK"
 # kill $SERVER_PID 2>/dev/null || true
 ```
 
-After generating, make it executable: `chmod +x <SPEC_DIR>/init.sh`.
+After generating, make it executable: `chmod +x <AI_KNOWLEDGE_DIR>/init.sh`.
 
-Also create `<SPEC_DIR>/AGENT.md` if it does not exist, seeded with what you know from plan.md:
+Also create `<AI_KNOWLEDGE_DIR>/AGENT.md` if it does not exist, seeded with what you know from plan.md:
 ```markdown
 # Project Agent Notes
 
@@ -150,6 +157,8 @@ Updated: <ISO timestamp>
 (populated by loop iterations)
 ```
 
+These files live at the **project root** under `.ai-knowledge/<feature-slug>/` — not inside `.specify/`. They persist across extension updates and accumulate across the entire project lifetime.
+
 ### Phase 6 — Implement Loop
 Run the orchestrator script. Determine `SPEC_DIR` from the feature directory (found via the specify/tasks output or `session.md`):
 
@@ -158,6 +167,7 @@ Run the orchestrator script. Determine `SPEC_DIR` from the feature directory (fo
   --feature-name "<feature-slug>" \
   --tasks-path "<SPEC_DIR>/tasks.md" \
   --spec-dir "<SPEC_DIR>" \
+  --ai-knowledge-dir "$PROJECT_ROOT/.ai-knowledge/<feature-slug>" \
   --max-iterations <loop.max_iterations> \
   --checkpoint-frequency <loop.checkpoint_frequency> \
   --model "<model>" \

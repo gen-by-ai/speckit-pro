@@ -29,6 +29,7 @@ RESUME=false
 FEATURE_NAME=""
 TASKS_PATH=""
 SPEC_DIR=""
+AI_KNOWLEDGE_DIR=""  # derived after arg parsing if not provided
 
 # Evaluator (generator/evaluator split — Anthropic harness pattern)
 ENABLE_EVALUATOR=false
@@ -50,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --feature-name)     FEATURE_NAME="$2";     shift 2 ;;
     --tasks-path)       TASKS_PATH="$2";       shift 2 ;;
     --spec-dir)         SPEC_DIR="$2";         shift 2 ;;
+    --ai-knowledge-dir) AI_KNOWLEDGE_DIR="$2"; shift 2 ;;
     --max-iterations)   MAX_ITERATIONS="$2";   shift 2 ;;
     --checkpoint-frequency) CHECKPOINT_FREQUENCY="$2"; shift 2 ;;
     --model)            MODEL="$2";            shift 2 ;;
@@ -61,6 +63,13 @@ while [[ $# -gt 0 ]]; do
     *)                  echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+# ─── Derive AI_KNOWLEDGE_DIR ──────────────────────────────────────────────
+if [[ -z "$AI_KNOWLEDGE_DIR" ]]; then
+  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/$FEATURE_NAME"
+fi
+mkdir -p "$AI_KNOWLEDGE_DIR/contracts" "$AI_KNOWLEDGE_DIR/evaluations"
 
 # ─── Validation ──────────────────────────────────────────────────────────────
 if [[ -z "$FEATURE_NAME" || -z "$TASKS_PATH" || -z "$SPEC_DIR" ]]; then
@@ -74,8 +83,8 @@ if [[ ! -f "$TASKS_PATH" ]]; then
 fi
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-PROGRESS_FILE="$SPEC_DIR/progress.md"
-SESSION_FILE="$SPEC_DIR/session.md"
+PROGRESS_FILE="$AI_KNOWLEDGE_DIR/progress.md"  # persistent audit trail
+SESSION_FILE="$SPEC_DIR/session.md"             # transient pipeline state
 CONTEXT_SUMMARY="$SPEC_DIR/context-summary.md"
 
 # ─── Helper Functions ────────────────────────────────────────────────────────

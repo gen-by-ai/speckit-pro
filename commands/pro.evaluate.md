@@ -23,12 +23,15 @@ Parse from `$ARGUMENTS`:
 | `sprint` | yes | Sprint/iteration number being evaluated |
 | `contract` | yes | Path to sprint contract file |
 | `tasks` | yes | Path to tasks.md |
+| `ai-knowledge-dir` | no | Absolute path to `.ai-knowledge/<feature>` dir (default: derived from git root) |
+
+Derive `<ai-knowledge-dir>` the same way as the loop: `$(git rev-parse --show-toplevel)/.ai-knowledge/<feature>`.
 
 ## Evaluation Steps
 
 ### Step 1 — Calibrate Against Past Evaluations
 
-Before scoring anything, read all files in `<spec-dir>/evaluations/` (sorted oldest → newest). Look for:
+Before scoring anything, read all files in `<ai-knowledge-dir>/evaluations/` (sorted oldest → newest). Look for:
 - **Score drift**: are scores trending too high/low across sprints?
 - **Recurring failures**: issues the generator keeps reintroducing (log these as higher severity this sprint)
 - **Resolved issues**: things previously flagged that are now genuinely fixed
@@ -37,14 +40,14 @@ Use this to set your scoring bar. If Sprint 1 scored 72 and Sprint 2 scored 91 w
 
 ### Step 2 — Load the Sprint Contract
 
-Read `<spec-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
+Read `<ai-knowledge-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
 
 ### Step 3 — Live Browser Testing (if applicable)
 
-If `<spec-dir>/init.sh` exists and the contract includes UI or API criteria, run the app and test it live:
+If `<ai-knowledge-dir>/init.sh` exists and the contract includes UI or API criteria, run the app and test it live:
 
 ```bash
-bash <spec-dir>/init.sh   # start the dev server
+bash <ai-knowledge-dir>/init.sh   # start the dev server
 ```
 
 Then use the **agent-browser skill** (`.agents/skills/agent-browser/SKILL.md`) to exercise the running application as a real user would:
@@ -70,7 +73,7 @@ Read the actual code files changed this sprint (check `git diff HEAD~1` or the h
 
 ### Step 5 — Write Evaluation & Verdict
 
-Write evaluation to `<spec-dir>/evaluations/sprint-<N>.md`.
+Write evaluation to `<ai-knowledge-dir>/evaluations/sprint-<N>.md`.
 Apply the four severity tiers: CRITICAL / MEDIUM / LOW / INFO.
 Output `<pro-eval>VERDICT:details</pro-eval>` as final line.
 
