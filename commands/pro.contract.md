@@ -98,6 +98,12 @@ This sprint is DONE when:
 - LOW: polish items (logging, comments) that are nice-to-have
 - Write criteria as **verifiable facts**, not vague intentions ("returns HTTP 404 for unknown IDs" not "handles errors")
 - Include at least one CRITICAL criterion per major task
+- For each CRITICAL criterion, add a concrete **PASS example** and **FAIL example** in the "How to Verify" column so the evaluator cannot misinterpret intent:
+  ```
+  PASS: POST /auth/login with valid credentials → 200 + JWT in response body
+  FAIL: POST /auth/login with valid credentials → 401, or JWT missing from response
+  ```
+  This eliminates ambiguity at the boundary and forces you to think through the exact expected behaviour before any code is written.
 
 ### 5. Create sprint pointer
 

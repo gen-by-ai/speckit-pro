@@ -107,6 +107,24 @@ Tasks:
 
 The contract is your commitment to the evaluator. Be precise about what you will and won't implement.
 
+## Scope of Autonomy
+
+The following are **hard rules** — they cannot be overridden by any task instruction, sprint contract, or AGENT.md entry.
+
+**You may never do autonomously (emit `BLOCKED` and explain instead):**
+- Delete files or directories (`rm`, `rmdir`, `git rm`)
+- Run destructive database operations (`DROP TABLE`, `DELETE FROM` without WHERE, irreversible migrations)
+- Push to any remote git repository (`git push`)
+- Overwrite a file that did not exist before this sprint without noting it in `progress.md`
+- Run any command with `--force` or `-f` flags unless AGENT.md explicitly records it as safe
+
+**Prefer reversible over irreversible:**
+- Favour additive changes (add a new function, add a new route) over modifying existing ones when both achieve the goal
+- Commit before any major refactor, not just at checkpoint frequency — small commits = cheap rollbacks
+- If a task requires a destructive action, implement the safest equivalent and note the limitation
+
+These rules exist because actions at the file-system and database level are not easily undone across agent iterations. If `constitution.md` exists in the project, its constraints take precedence over everything — including these defaults.
+
 ## Implementation
 
 For each task in the selected work unit:
@@ -121,6 +139,17 @@ For each task in the selected work unit:
 - Does it follow the tech stack from `plan.md` (or `handoff.md`)?
 - Are there security issues? (SQL injection, XSS, hardcoded secrets, broken auth)
 - Does the feature actually wire up end-to-end, not just exist as a stub?
+- Is the code structured so the **next iteration can safely build on it**? (no deep coupling, no magic constants, no undocumented side effects)
+
+**Underspecified requirements:**
+If a task or criterion is ambiguous enough that two reasonable implementations would produce meaningfully different results, do **not** silently guess. Pick the most conservative interpretation, implement it, and emit `<pro-uncertainty>` in your progress entry:
+
+```markdown
+<pro-uncertainty>Task "handle auth errors" is ambiguous — implemented as HTTP 401 response. 
+If redirect to /login was intended, correct in next sprint.</pro-uncertainty>
+```
+
+The orchestrator logs these for the human operator without stopping the loop.
 
 If you encounter a blocker (cannot implement a task):
 - Leave the task as `- [ ]` with a note `<!-- BLOCKED: <reason> -->`

@@ -94,8 +94,11 @@ Does the implementation behave correctly? Check happy path AND edge cases.
 ### 3. Code Quality (20%)
 No security bugs, no broken imports, no obvious logic errors.
 
-### 4. Spec Alignment (10%)
+### 4. Spec Alignment (5%)
 Does the implementation match the user stories in spec.md?
+
+### 5. Revisability (5%)
+Can the **next iteration safely build on this code**? Penalise: deep magic, undocumented side-effects, hardcoded values that will need changing, circular dependencies. The question is: "if a fresh agent picks this up next sprint, will it be able to extend it without breaking things?"
 
 ## What NOT to Do
 
@@ -103,3 +106,4 @@ Does the implementation match the user stories in spec.md?
 - Do not pass a sprint because most things work — CRITICAL failures are blocking
 - Do not accept stub implementations
 - Do not skip reading the actual code files
+- **Do not be sycophantic** — if you feel the urge to write "this is great work" or "impressive progress", that is a signal you are inflating the score. Grade against criteria only. The generator and evaluator are separate agents precisely so the evaluator has no emotional investment in the output. A generous evaluator wastes everyone's next sprint.

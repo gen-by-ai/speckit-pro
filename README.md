@@ -32,6 +32,9 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
 | No pre-flight sanity check | `init.sh` smoke-tests the app before each new work unit |
+| Agent grades its own work — self-praise bias | Separate evaluator with explicit **anti-sycophancy** rules |
+| Loop silently guesses at ambiguous requirements | **Uncertainty signalling** — `<pro-uncertainty>` logged for operator |
+| No hard limits on irreversible actions | **Scope of Autonomy** — hard rules on what loop may never do alone |
 | No session state — can't resume | Full session persistence → `/speckit.pro.resume` |
 | No visibility into autonomous progress | Rich status dashboard → `/speckit.pro.status` |
 
@@ -42,7 +45,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.3.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.4.0.zip
 ```
 
 ### From source (local dev)
@@ -57,7 +60,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.3.0)
+# ✓ SpecKit Pro (v1.4.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -217,10 +220,11 @@ export SPECKIT_PRO_AGENT_CLI="claude"
          │  2. Run init.sh smoke test           │
          │  3. Load handoff.md (context reset)  │
          │  4. Implement ONE work unit          │
-         │     against contract criteria        │
-         │  5. Update tasks.md + progress.md    │
-         │  6. Write next handoff.md            │
-         │  7. Update AGENT.md with learnings   │
+         │     (Scope of Autonomy hard rules)   │
+         │  5. Signal uncertainty if ambiguous  │
+         │  6. Update tasks.md + progress.md    │
+         │  7. Write next handoff.md            │
+         │  8. Update AGENT.md with learnings   │
          │  Outputs: <pro-status>TAG</pro-status>          │
          └──────────────┬───────────────────────┘
                         ▼
@@ -231,7 +235,9 @@ export SPECKIT_PRO_AGENT_CLI="claude"
          │  2. Start app via init.sh            │
          │  3. agent-browser: click every       │
          │     CRITICAL criterion live          │
-         │  4. Static code review               │
+         │  4. Static code + revisability check │
+         │  5. Anti-sycophancy: score criteria  │
+         │     only, no "great work" inflation  │
          │  PASS → continue                     │
          │  NEEDS_REVISION → generator retries  │
          │  FAIL → human review required        │
@@ -442,7 +448,11 @@ speckit-pro/
 
 8. **The evaluator uses agent-browser — your app must be startable** — `init.sh` is the key. If it exits non-zero, the evaluator marks all UI criteria FAIL. Keep it fast (under 30 seconds).
 
-9. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
+9. **Watch for `<pro-uncertainty>` entries in `progress.md`** — These are places where the loop encountered ambiguous requirements and made a conservative guess. Review them after each sprint and clarify the spec if the guess was wrong.
+
+10. **The Scope of Autonomy hard rules protect you** — The loop will never delete files, push to remote, or run destructive DB operations on its own. If a task genuinely requires one of these, the loop will emit `BLOCKED` and wait for you.
+
+11. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
 
 ---
 
