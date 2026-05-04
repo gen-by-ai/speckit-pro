@@ -26,15 +26,53 @@ Parse from `$ARGUMENTS`:
 
 ## Evaluation Steps
 
-Follow the instructions in `agents/pro.evaluate.agent.md` exactly.
+### Step 1 — Calibrate Against Past Evaluations
 
-Key behaviors:
-1. Load the sprint contract — it defines what "done" means
-2. Read the actual code, not just the generator's self-report
-3. Check edge cases and error paths
-4. Apply the four severity tiers: CRITICAL / MEDIUM / LOW / INFO
-5. Write evaluation to `<spec-dir>/evaluations/sprint-<N>.md`
-6. Output `<pro-eval>VERDICT:details</pro-eval>` as final line
+Before scoring anything, read all files in `<spec-dir>/evaluations/` (sorted oldest → newest). Look for:
+- **Score drift**: are scores trending too high/low across sprints?
+- **Recurring failures**: issues the generator keeps reintroducing (log these as higher severity this sprint)
+- **Resolved issues**: things previously flagged that are now genuinely fixed
+
+Use this to set your scoring bar. If Sprint 1 scored 72 and Sprint 2 scored 91 with no obvious quality jump, your evaluator is drifting generous — correct for it.
+
+### Step 2 — Load the Sprint Contract
+
+Read `<spec-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
+
+### Step 3 — Live Browser Testing (if applicable)
+
+If `<spec-dir>/init.sh` exists and the contract includes UI or API criteria, run the app and test it live:
+
+```bash
+bash <spec-dir>/init.sh   # start the dev server
+```
+
+Then use the **agent-browser skill** (`.agents/skills/agent-browser/SKILL.md`) to exercise the running application as a real user would:
+
+```bash
+agent-browser open http://localhost:<port>
+agent-browser snapshot -i
+# Click through every user flow listed in the contract criteria
+# Screenshot on failure: agent-browser screenshot <label>
+```
+
+**Test every CRITICAL contract criterion** by actually clicking through the UI or hitting the API endpoint — not by reading source code alone. Record findings as `PASS` / `FAIL` with exact reproduction steps.
+
+If the app fails to start, mark all UI criteria as FAIL with reason `app-not-startable`.
+
+### Step 4 — Static Code Review
+
+Read the actual code files changed this sprint (check `git diff HEAD~1` or the handoff.md file list). Verify:
+- Edge cases and error paths (not just happy path)
+- Security issues: SQL injection, XSS, hardcoded secrets, broken auth
+- Stub or placeholder implementations (auto-fail if found)
+- Broken imports or wiring
+
+### Step 5 — Write Evaluation & Verdict
+
+Write evaluation to `<spec-dir>/evaluations/sprint-<N>.md`.
+Apply the four severity tiers: CRITICAL / MEDIUM / LOW / INFO.
+Output `<pro-eval>VERDICT:details</pro-eval>` as final line.
 
 ## Output Protocol
 

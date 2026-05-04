@@ -51,30 +51,13 @@ If the user says no: `Pipeline cancelled. Run /pro.go <description> to start aga
 
 ## Phase Protocol
 
-For each phase:
+For each phase: **announce → execute → gate → update session**.
 
-**A. Announce** — print a banner:
-```
-═══════════════════════════════════════════════════════════
-  SpecKit Pro │ <phase> — running /speckit.<cmd>
-═══════════════════════════════════════════════════════════
-```
-
-**B. Execute** — run the native SpecKit command with `EXECUTE_COMMAND`.
-
-**C. Gate** — if the gate for this phase is `true`:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ⏸  Human gate: <phase>
-  Review the output above. Press Enter to continue, or
-  type 'abort' to stop here.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-If the user types `abort`: stop the pipeline and print the feature directory for resuming with `/pro.resume`.
-
-If gate is `false`: print `[Pro] Auto-continuing...` and proceed.
-
-**D. Update session** — append a session entry to `<FEATURE_DIR>/session.md`.
+- **Announce**: `[Pro] Phase N — running /speckit.<cmd>`
+- **Execute**: run the native SpecKit command with `EXECUTE_COMMAND`
+- **Gate** (if `true`): ask `⏸ Review above. Press Enter to continue or type 'abort'.` If abort: print the feature directory for resuming with `/pro.resume` and stop.
+- **Gate** (if `false`): print `[Pro] Auto-continuing...`
+- **Update session**: append a one-line entry to `<FEATURE_DIR>/session.md`
 
 ## Phase Order
 
@@ -119,6 +102,53 @@ If analyze reports CRITICAL issues, pause regardless of gate setting:
 - `yes` → pause for human to fix
 - `no` → abort pipeline
 - `force` → continue despite issues (log a warning to session.md)
+
+### Phase 5b — Initializer Setup
+
+Before the implement loop, ensure `<SPEC_DIR>/init.sh` exists. This script is how every future loop iteration verifies the app is still runnable before picking up new work.
+
+**If `<SPEC_DIR>/init.sh` does not exist**, generate it now by reading `plan.md` to understand the tech stack. The script must:
+1. Start the development server (or compile the project)
+2. Run a basic smoke test (e.g., `curl http://localhost:PORT/health` or run the test suite with a short timeout)
+3. Exit `0` on success, non-zero on failure
+
+Example template:
+```bash
+#!/usr/bin/env bash
+set -e
+
+# Start dev server in background (adjust for your stack)
+# npm run dev &  OR  uvicorn main:app &  OR  go run . &
+# SERVER_PID=$!
+
+# Wait and smoke test
+# sleep 3
+# curl -sf http://localhost:3000 > /dev/null || exit 1
+
+echo "Smoke test: OK"
+# kill $SERVER_PID 2>/dev/null || true
+```
+
+After generating, make it executable: `chmod +x <SPEC_DIR>/init.sh`.
+
+Also create `<SPEC_DIR>/AGENT.md` if it does not exist, seeded with what you know from plan.md:
+```markdown
+# Project Agent Notes
+
+Updated: <ISO timestamp>
+
+## How to Start the App
+<commands from plan.md>
+
+## How to Run Tests
+<test commands from plan.md>
+
+## Known Gotchas
+(none yet)
+
+## Build Learnings
+(populated by loop iterations)
+```
 
 ### Phase 6 — Implement Loop
 Run the orchestrator script. Determine `SPEC_DIR` from the feature directory (found via the specify/tasks output or `session.md`):

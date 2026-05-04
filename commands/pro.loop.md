@@ -47,13 +47,22 @@ Parse the following from `$ARGUMENTS` (space-separated key=value pairs):
    - `<spec-dir>/progress.md` — history of previous iterations (if exists, last 10 entries only)
    - `<spec-dir>/session.md` — session state (if exists)
 
-2. **Parse task state** — scan `tasks.md` for:
+2. **Load `AGENT.md`** — if `<spec-dir>/AGENT.md` exists, read it. It contains learnings from previous iterations about how to build, run, and test this project. Always honour the commands and sequences it records.
+
+3. **Run smoke test** — if `<spec-dir>/init.sh` exists, execute it:
+   ```bash
+   bash <spec-dir>/init.sh
+   ```
+   - If it exits non-zero, fix the break before implementing new features and log it in `progress.md` under `### Pre-iteration fix`.
+   - If it exits zero, note `[smoke-test: OK]` in your progress entry.
+
+4. **Parse task state** — scan `tasks.md` for:
    - Total task count: lines matching `- [ ]` or `- [x]` or `- [X]`
    - Completed count: lines matching `- [x]` or `- [X]`
    - Incomplete count: remaining unchecked items
    - Next work unit: first incomplete phase/section heading with tasks under it
 
-3. **Early termination checks**:
+5. **Early termination checks**:
    - If `incomplete_count == 0`: output `<pro-status>COMPLETE</pro-status>` and stop
    - If `iteration > max`: output `<pro-status>MAX_ITERATIONS</pro-status>` and stop
 
@@ -205,6 +214,36 @@ If `iteration % checkpoint_frequency == 0` OR all tasks are complete:
 3. Log commit hash in `progress.md`
 
 If git is not available, skip with a warning.
+
+## AGENT.md Self-Update
+
+After the checkpoint commit, review what you learned this iteration. If you discovered anything new about how to build, run, or test this project — commands, environment quirks, correct sequences — **update `<spec-dir>/AGENT.md`**:
+
+```bash
+# Append a bullet under the relevant section. Keep it brief.
+```
+
+Structure of `<spec-dir>/AGENT.md` (create if missing):
+
+```markdown
+# Project Agent Notes
+
+Updated: <ISO timestamp>
+
+## How to Start the App
+<commands to start dev server / run the app>
+
+## How to Run Tests
+<test commands — unit, integration, e2e>
+
+## Known Gotchas
+- <anything that tripped up a previous agent>
+
+## Build Learnings
+- <commands that failed and the correct alternative>
+```
+
+**Rules**: Never put status reports in `AGENT.md`. Keep each bullet under 20 words. Future agents will load this at the top of every iteration.
 
 ## Completion Signals
 
