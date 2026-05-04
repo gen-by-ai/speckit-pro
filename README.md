@@ -11,7 +11,11 @@
 
 ---
 
-**SpecKit Pro** is a [Spec Kit](https://github.com/github/spec-kit) extension that supercharges the SDD workflow for long, autonomous AI-driven development sessions. It adds a full pipeline orchestrator, a self-healing implementation loop, session persistence, context compression, and rich observability — all while staying 100% on top of the standard SpecKit extension system.
+**SpecKit Pro** is a [Spec Kit](https://github.com/github/spec-kit) extension that turns SpecKit into an overnight, hands-off coding engine.
+
+The core idea: native SpecKit gives you great individual commands — `specify`, `plan`, `tasks`, `implement`. SpecKit Pro wires them into a **self-healing autonomous loop** you can start, walk away from, and come back to a finished feature. It implements the patterns Anthropic found essential for long autonomous runs: a separate evaluator agent (so the agent can't grade its own work), sprint contracts negotiated before coding starts, per-sprint context resets via `handoff.md` (so context anxiety never accumulates), a living `AGENT.md` that the loop writes to itself as it learns about the project, and live browser testing of the running app — not just source code review.
+
+It hooks into native SpecKit rather than replacing it, so upstream improvements to `speckit.plan` or `speckit.implement` benefit you automatically.
 
 ## Why SpecKit Pro?
 
@@ -24,7 +28,10 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | `/speckit.implement` runs one pass | Self-healing loop with circuit breaker and retry |
 | No quality gate between tasks and implement | Sprint contracts auto-generated via `after_tasks` hook |
 | No independent QA — agent grades its own work | Separate evaluator agent via `after_implement` hook |
+| Evaluator reads code statically | Evaluator uses **agent-browser** to click through the live running app |
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
+| No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
+| No pre-flight sanity check | `init.sh` smoke-tests the app before each new work unit |
 | No session state — can't resume | Full session persistence → `/speckit.pro.resume` |
 | No visibility into autonomous progress | Rich status dashboard → `/speckit.pro.status` |
 
@@ -50,7 +57,7 @@ specify extension add --dev /path/to/spec-kit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.2.0)
+# ✓ SpecKit Pro (v1.3.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -114,7 +121,7 @@ If you've already done specify → plan → tasks:
 | Command | Fires automatically | Description |
 |---|---|---|
 | `/speckit.pro.contract` | after `/speckit.tasks` | Generate sprint contract — concrete acceptance criteria before coding |
-| `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation against the sprint contract (separate evaluator agent) |
+| `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, then drives the live app with **agent-browser** to test every CRITICAL criterion |
 | `/speckit.pro.checkpoint` | manual | Commit + session snapshot + progress log entry |
 
 ### Loop & Observability
@@ -206,18 +213,25 @@ export SPECKIT_PRO_AGENT_CLI="claude"
                         ▼
          ┌──────────────────────────────────────┐
          │  GENERATOR: speckit.pro.loop         │
-         │  Reads: handoff.md (context reset)   │
-         │  Implements ONE work unit            │
-         │  Implements against contract criteria│
-         │  Updates tasks.md + progress.md      │
-         │  Writes next handoff.md              │
+         │  1. Read AGENT.md (project memory)   │
+         │  2. Run init.sh smoke test           │
+         │  3. Load handoff.md (context reset)  │
+         │  4. Implement ONE work unit          │
+         │     against contract criteria        │
+         │  5. Update tasks.md + progress.md    │
+         │  6. Write next handoff.md            │
+         │  7. Update AGENT.md with learnings   │
          │  Outputs: <pro-status>TAG</pro-status>          │
          └──────────────┬───────────────────────┘
                         ▼
          ┌──────────────────────────────────────┐
          │  EVALUATOR: speckit.pro.evaluate     │
          │  Fresh agent — no generator context  │
-         │  Reads contract + actual code        │
+         │  1. Calibrate vs past sprint scores  │
+         │  2. Start app via init.sh            │
+         │  3. agent-browser: click every       │
+         │     CRITICAL criterion live          │
+         │  4. Static code review               │
          │  PASS → continue                     │
          │  NEEDS_REVISION → generator retries  │
          │  FAIL → human review required        │
@@ -296,6 +310,36 @@ These files allow `/speckit.pro.resume` to pick up exactly where you left off af
 # Evaluation — Sprint 3
 Verdict: PASS (score: 82/100)
 CRITICAL: 2/2 pass  MEDIUM: 1/2 pass  LOW: 3/3 pass
+
+## Browser Test Results (via agent-browser)
+- POST /auth/login → navigated to /dashboard ✓
+- Invalid password → 401 page shown ✓
+```
+
+**`AGENT.md`** — Project memory written by the loop (auto-generated, auto-updated):
+```markdown
+# Project Agent Notes
+
+## How to Start the App
+npm run dev   # starts on port 3000
+
+## How to Run Tests
+npm test -- --testPathPattern=src/auth
+
+## Known Gotchas
+- Must seed the DB before running auth tests: npm run db:seed
+
+## Build Learnings
+- `npm run build` fails if .env is missing — copy .env.example first
+```
+
+**`init.sh`** — Smoke test script (auto-generated by `pro.go`, run by loop before each work unit):
+```bash
+#!/usr/bin/env bash
+set -e
+npm install --silent
+npm run build -- --check
+echo "Smoke test: OK"
 ```
 
 ---
@@ -341,8 +385,8 @@ spec-kit-pro/
 ├── commands/
 │   ├── pro.go.md                  # → /speckit.pro.go  — thin pipeline runner
 │   ├── pro.contract.md            # → /speckit.pro.contract  — sprint contracts (after_tasks hook)
-│   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator (after_implement hook)
-│   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker
+│   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator with agent-browser (after_implement hook)
+│   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update
 │   ├── pro.status.md              # → /speckit.pro.status  — status dashboard
 │   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
 │   ├── pro.checkpoint.md          # → /speckit.pro.checkpoint  — named checkpoint
@@ -365,6 +409,17 @@ spec-kit-pro/
 ├── README.md
 ├── CHANGELOG.md
 └── .extensionignore               # Distribution exclusions
+
+# Generated per-feature (inside .specify/<feature-dir>/)
+.specify/<feature>/
+├── spec.md / plan.md / tasks.md   # Native SpecKit artifacts
+├── init.sh                        # Auto-generated smoke test (run before every work unit)
+├── AGENT.md                       # Loop's self-written project memory (grows each iteration)
+├── handoff.md                     # Per-sprint context reset artifact
+├── progress.md                    # Iteration log
+├── session.md                     # Pipeline phase state
+├── contracts/sprint-N.md          # Sprint contracts (one per sprint)
+└── evaluations/sprint-N.md        # Evaluator verdicts with browser test results
 ```
 
 ---
@@ -383,7 +438,11 @@ spec-kit-pro/
 
 6. **Context resets beat compression** — `handoff.md` gives each sprint a clean slate. Long runs with growing context produce worse code as the agent tries to reconcile accumulated history.
 
-7. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
+7. **Let `AGENT.md` accumulate — don't reset it** — It's the loop's persistent project memory. After a few sprints it contains hard-won learnings about your specific stack. Treat it like a good `CONTRIBUTING.md`.
+
+8. **The evaluator uses agent-browser — your app must be startable** — `init.sh` is the key. If it exits non-zero, the evaluator marks all UI criteria FAIL. Keep it fast (under 30 seconds).
+
+9. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
 
 ---
 
