@@ -5,7 +5,7 @@ description: Rich status dashboard showing current phase, task progress, session
 compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
-  source: pro:commands/speckit.pro.status.md
+  source: pro:commands/pro.status.md
 ---
 
 # SpecKit Pro — Status Dashboard
@@ -27,7 +27,7 @@ Optional flags in `$ARGUMENTS`:
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json` to detect `FEATURE_DIR`.
 2. If `--feature` was provided, use that feature name to locate its spec directory.
-3. If no feature is found, output: `[Pro] No active feature found. Run /speckit.pro.run <description> to start.`
+3. If no feature is found, output: `[Pro] No active feature found. Run /pro.run <description> to start.`
 
 ## Data Collection
 
@@ -81,8 +81,8 @@ From git (if available):
 ╠══════════════════════════════════════════════════════════════╣
 ║  NEXT ACTIONS                                                ║
 ╠══════════════════════════════════════════════════════════════╣
-║  • /speckit.pro.resume — continue the autonomous loop        ║
-║  • /speckit.pro.checkpoint — save a manual checkpoint        ║
+║  • /pro.resume — continue the autonomous loop        ║
+║  • /pro.checkpoint — save a manual checkpoint        ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 

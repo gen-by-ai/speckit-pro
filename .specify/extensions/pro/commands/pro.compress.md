@@ -128,7 +128,7 @@ The `speckit.pro.loop` command will automatically load `context-summary.md` (if 
 [Pro] Context compressed ✓
   Output:      <FEATURE_DIR>/context-summary.md
   Reduction:   ~<N>% token savings estimated
-  Recommended: Use /speckit.pro.loop or /speckit.pro.resume to continue
+  Recommended: Use /pro.loop or /pro.resume to continue
 ```
 
 ## Graceful Degradation

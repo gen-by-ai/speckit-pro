@@ -30,6 +30,11 @@ FEATURE_NAME=""
 TASKS_PATH=""
 SPEC_DIR=""
 
+# Evaluator (generator/evaluator split — Anthropic harness pattern)
+ENABLE_EVALUATOR=false
+EVAL_THRESHOLD=70       # minimum score (0-100) for PASS
+MAX_REVISIONS=2         # max generator revision attempts per sprint before FAIL
+
 # ─── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,6 +55,9 @@ while [[ $# -gt 0 ]]; do
     --model)            MODEL="$2";            shift 2 ;;
     --agent-cli)        AGENT_CLI="$2";        shift 2 ;;
     --resume)           RESUME=true;           shift ;;
+    --enable-evaluator) ENABLE_EVALUATOR=true; shift ;;
+    --eval-threshold)   EVAL_THRESHOLD="$2";   shift 2 ;;
+    --max-revisions)    MAX_REVISIONS="$2";    shift 2 ;;
     *)                  echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -241,6 +249,81 @@ run_agent_iteration() {
   echo "$status_tag"
 }
 
+# ─── Evaluator Functions ─────────────────────────────────────────────────────
+
+run_evaluator() {
+  local sprint="$1" resolved_cli="$2"
+  local contract_path="$SPEC_DIR/contracts/sprint-${sprint}.md"
+  local eval_output eval_tag
+
+  local eval_args="feature=$FEATURE_NAME spec-dir=$SPEC_DIR sprint=$sprint"
+  eval_args="$eval_args contract=$contract_path tasks=$TASKS_PATH model=$MODEL"
+
+  log_info "Spawning evaluator for sprint $sprint..."
+
+  case "$resolved_cli" in
+    copilot)
+      eval_output=$(
+        "$resolved_cli" agent --model "$MODEL" \
+          ".github/agents/speckit.pro.evaluate.agent.md" \
+          "$eval_args" 2>&1
+      ) || true
+      ;;
+    claude)
+      eval_output=$(
+        "$resolved_cli" --model "$MODEL" --print \
+          --system-prompt ".github/agents/speckit.pro.evaluate.agent.md" \
+          "$eval_args" 2>&1
+      ) || true
+      ;;
+    *)
+      eval_output=$(
+        "$resolved_cli" ".github/agents/speckit.pro.evaluate.agent.md" "$eval_args" 2>&1
+      ) || true
+      ;;
+  esac
+
+  # Extract <pro-eval> tag
+  eval_tag=$(echo "$eval_output" | grep -oE '<pro-eval>[^<]+</pro-eval>' | tail -1 | sed 's/<[^>]*>//g' || echo "UNKNOWN")
+  echo "$eval_tag"
+}
+
+handle_eval_result() {
+  local eval_tag="$1" sprint="$2" revision="$3"
+  local verdict score_or_issues
+
+  # Parse VERDICT:details from tag
+  verdict=$(echo "$eval_tag" | cut -d: -f1)
+  score_or_issues=$(echo "$eval_tag" | cut -d: -f2-)
+
+  case "$verdict" in
+    PASS)
+      local score="$score_or_issues"
+      log_success "Evaluator: PASS (score: ${score}%)"
+      if [[ "$score" -lt "$EVAL_THRESHOLD" ]] 2>/dev/null; then
+        log_warn "Score ${score}% below threshold ${EVAL_THRESHOLD}% — requesting revision"
+        return 1  # needs revision
+      fi
+      return 0  # accepted
+      ;;
+    NEEDS_REVISION)
+      log_warn "Evaluator: NEEDS_REVISION — $score_or_issues"
+      log_warn "Revision $revision/$MAX_REVISIONS — generator will fix and retry"
+      return 1  # needs revision
+      ;;
+    FAIL)
+      log_error "Evaluator: FAIL — $score_or_issues"
+      log_error "Sprint $sprint failed evaluation after $revision revision(s)"
+      update_session "evaluate" "failed" "Sprint $sprint: $score_or_issues"
+      return 2  # hard fail
+      ;;
+    *)
+      log_warn "Evaluator returned unknown verdict '$verdict' — treating as PASS"
+      return 0
+      ;;
+  esac
+}
+
 print_progress_bar() {
   local completed="$1" total="$2"
   local bar_width=20 filled empty percentage
@@ -297,6 +380,7 @@ main() {
   echo -e "${BOLD}${GREEN}╠══════════════════════════════════════════════════════╣${RESET}"
   echo -e "${GREEN}║  Feature:    $FEATURE_NAME${RESET}"
   echo -e "${GREEN}║  Max iter:   $MAX_ITERATIONS | Checkpoints every $CHECKPOINT_FREQUENCY${RESET}"
+  echo -e "${GREEN}║  Evaluator:  $([[ $ENABLE_EVALUATOR == true ]] && echo "enabled (threshold: ${EVAL_THRESHOLD}%, revisions: ${MAX_REVISIONS})" || echo 'disabled')${RESET}"
   echo -e "${GREEN}║  Model:      $MODEL${RESET}"
   echo -e "${GREEN}║  Agent CLI:  $resolved_cli${RESET}"
   echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${RESET}"
@@ -317,23 +401,68 @@ main() {
     print_progress_bar "$completed" "$total"
     echo ""
 
-    # Run agent iteration
-    log_info "Spawning agent iteration $iteration/$MAX_ITERATIONS..."
+    # ── Generator sprint ───────────────────────────────────────────────────
+    log_info "Spawning generator iteration $iteration/$MAX_ITERATIONS..."
     local agent_status
     agent_status=$(run_agent_iteration "$iteration" "$resolved_cli" | tail -1)
+    log_info "Generator status: $agent_status"
 
-    log_info "Agent status: $agent_status"
+    # ── Evaluator cycle (if enabled) ───────────────────────────────────────
+    if [[ "$ENABLE_EVALUATOR" == true ]] && [[ "$agent_status" != "COMPLETE" ]] && [[ "$agent_status" != "ERROR:"* ]]; then
+      local revision=1 eval_result
+      while [[ "$revision" -le "$MAX_REVISIONS" ]]; do
+        local eval_tag
+        eval_tag=$(run_evaluator "$iteration" "$resolved_cli")
+        log_info "Evaluator tag: $eval_tag"
 
-    # Process status tag
+        handle_eval_result "$eval_tag" "$iteration" "$revision"
+        eval_result=$?
+
+        if [[ "$eval_result" -eq 0 ]]; then
+          break  # Evaluator passed
+        elif [[ "$eval_result" -eq 2 ]]; then
+          # Hard fail — circuit breaker
+          read -r completed total <<< "$(count_tasks)"
+          checkpoint_commit "eval-fail-sprint${iteration}" "$completed" "$total"
+          exit 1
+        fi
+
+        # NEEDS_REVISION — give generator another pass
+        revision=$(( revision + 1 ))
+        if [[ "$revision" -le "$MAX_REVISIONS" ]]; then
+          log_info "Generator revision $revision/$MAX_REVISIONS..."
+          local rev_args
+          rev_args="feature=$FEATURE_NAME tasks=$TASKS_PATH spec-dir=$SPEC_DIR"
+          rev_args="$rev_args iteration=$iteration max=$MAX_ITERATIONS"
+          rev_args="$rev_args revision=$revision eval-feedback=$SPEC_DIR/evaluations/sprint-${iteration}.md"
+          # Run generator revision inline (brief pass — fix evaluator issues only)
+          case "$resolved_cli" in
+            copilot)
+              "$resolved_cli" agent --model "$MODEL" \
+                ".github/agents/speckit.pro.loop.agent.md" \
+                "$rev_args" &>/dev/null || true
+              ;;
+            *)
+              "$resolved_cli" ".github/agents/speckit.pro.loop.agent.md" "$rev_args" &>/dev/null || true
+              ;;
+          esac
+        else
+          log_warn "Max revisions ($MAX_REVISIONS) reached for sprint $iteration — moving on"
+        fi
+      done
+    fi
+
+    # ── Status processing ──────────────────────────────────────────────────
     case "$agent_status" in
       COMPLETE)
         log_success "Agent confirmed all tasks complete!"
+        read -r completed total <<< "$(count_tasks)"
         checkpoint_commit "final-complete" "$completed" "$total"
         update_session "implement" "completed" "All tasks complete after $iteration iterations"
         break
         ;;
       CONTINUE)
-        log_success "Iteration $iteration complete — continuing..."
+        log_success "Sprint $iteration complete — continuing..."
         consecutive_failures=0
         ;;
       BLOCKED:*)
@@ -341,7 +470,8 @@ main() {
         log_warn "Task blocked: $reason"
         consecutive_failures=$(( consecutive_failures + 1 ))
         if [[ "$consecutive_failures" -ge 3 ]]; then
-          log_error "Circuit breaker: $consecutive_failures consecutive blocks/failures"
+          log_error "Circuit breaker: $consecutive_failures consecutive blocks"
+          read -r completed total <<< "$(count_tasks)"
           update_session "implement" "blocked" "Circuit breaker triggered: $reason"
           checkpoint_commit "circuit-breaker-iter${iteration}" "$completed" "$total"
           exit 1
@@ -349,10 +479,11 @@ main() {
         ;;
       ERROR:*)
         local err_msg="${agent_status#ERROR:}"
-        log_error "Agent error: $err_msg"
+        log_error "Generator error: $err_msg"
         consecutive_failures=$(( consecutive_failures + 1 ))
         if [[ "$consecutive_failures" -ge 3 ]]; then
           log_error "Circuit breaker: 3 consecutive failures"
+          read -r completed total <<< "$(count_tasks)"
           update_session "implement" "failed" "Circuit breaker: $err_msg"
           checkpoint_commit "circuit-breaker-iter${iteration}" "$completed" "$total"
           exit 1
@@ -360,8 +491,7 @@ main() {
         log_warn "Retrying... ($consecutive_failures/3 failures)"
         ;;
       *)
-        # Unknown status — treat as continue but track
-        log_warn "Unknown agent status: '$agent_status' — treating as CONTINUE"
+        log_warn "Unknown generator status: '$agent_status' — treating as CONTINUE"
         consecutive_failures=0
         ;;
     esac

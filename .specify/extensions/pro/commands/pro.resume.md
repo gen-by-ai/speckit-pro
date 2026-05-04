@@ -26,8 +26,8 @@ Optional:
 If no `session.md` exists:
 ```
 [Pro] No session state found.
-• To start a new pipeline: /speckit.pro.run <description>
-• To resume the implement loop only: /speckit.pro.loop feature=<name> tasks=<path> ...
+• To start a new pipeline: /pro.run <description>
+• To resume the implement loop only: /pro.loop feature=<name> tasks=<path> ...
 ```
 
 ## Session Analysis
@@ -89,7 +89,7 @@ Check tasks.md for remaining work:
 
 ### If interrupted during a pipeline phase:
 
-Resume from the correct phase using the same phase execution protocol as `/speckit.pro.run`:
+Resume from the correct phase using the same phase execution protocol as `/pro.run`:
 
 - `specify`: EXECUTE_COMMAND speckit.specify
 - `clarify`: EXECUTE_COMMAND speckit.clarify

@@ -5,7 +5,7 @@ description: 'Autonomous implementation loop — single iteration worker: reads 
 compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
-  source: pro:commands/speckit.pro.loop.md
+  source: pro:commands/pro.loop.md
 ---
 
 # SpecKit Pro — Autonomous Loop Worker
@@ -39,11 +39,18 @@ Parse the following from `$ARGUMENTS` (space-separated key=value pairs):
 
 ## Pre-Iteration Setup
 
-1. **Load context files** — read these in order (they provide the agent's working memory):
+1. **Load context files** — use the leanest context that's sufficient:
+
+   **If `<spec-dir>/handoff.md` exists AND `iteration > 1`** (context-reset mode):
+   - Load ONLY `<spec-dir>/handoff.md` — it contains everything needed for this sprint
+   - Load `<spec-dir>/tasks.md` — to find next incomplete work unit
+   - Do NOT load spec.md, plan.md, or progress.md unless you need a specific detail not in handoff.md
+
+   **Otherwise** (first iteration or no handoff):
    - `<spec-dir>/spec.md` — requirements and user stories
    - `<spec-dir>/plan.md` — technical architecture
    - `<spec-dir>/tasks.md` — task checklist with completion state
-   - `<spec-dir>/progress.md` — history of previous iterations (if exists)
+   - `<spec-dir>/progress.md` — history of previous iterations (if exists, last 10 entries only)
    - `<spec-dir>/session.md` — session state (if exists)
 
 2. **Parse task state** — scan `tasks.md` for:
@@ -67,19 +74,50 @@ A "work unit" is defined as one of:
 - If a phase has parallel tasks marked `[P]`, implement them conceptually in parallel (same iteration)
 - Skip fully-completed phases
 
+## Sprint Contract (pre-implementation)
+
+**Before writing any code**, check for a sprint contract:
+
+1. Look for `<spec-dir>/contracts/sprint-<iteration>.md`
+2. If it exists: read it — the acceptance criteria define what "done" means for this sprint. Implement against those criteria, not just the task descriptions.
+3. If it does NOT exist: create one at `<spec-dir>/contracts/sprint-<iteration>.md` using this structure:
+
+```markdown
+# Sprint Contract — Sprint <N>
+
+Feature: <feature name>
+Created: <ISO timestamp>
+
+## Scope
+Work unit: <work unit name>
+Tasks:
+- <list of tasks from tasks.md being implemented this sprint>
+
+## Acceptance Criteria
+| # | Criterion | Severity | Verification |
+|---|---|---|---|
+| 1 | <what must be true> | CRITICAL/MEDIUM/LOW | <how to verify> |
+
+## Out of Scope
+- <anything explicitly deferred>
+```
+
+The contract is your commitment to the evaluator. Be precise about what you will and won't implement.
+
 ## Implementation
 
 For each task in the selected work unit:
 
-1. Read the task description carefully
-2. Implement the code/changes described
-3. Verify the implementation is correct and follows the plan
+1. Read the sprint contract criteria — implement against them
+2. Implement the code/changes described in the task
+3. Verify each acceptance criterion is met (check edge cases, not just happy path)
 4. Mark the task complete in `tasks.md` by changing `- [ ]` to `- [x]`
 
 **Quality checks during implementation**:
-- Does the implementation match `spec.md` user story requirements?
-- Does it follow the tech stack from `plan.md`?
-- Are there any obvious bugs or security issues?
+- Does the implementation satisfy each contract criterion?
+- Does it follow the tech stack from `plan.md` (or `handoff.md`)?
+- Are there security issues? (SQL injection, XSS, hardcoded secrets, broken auth)
+- Does the feature actually wire up end-to-end, not just exist as a stub?
 
 If you encounter a blocker (cannot implement a task):
 - Leave the task as `- [ ]` with a note `<!-- BLOCKED: <reason> -->`
@@ -120,6 +158,49 @@ Started: <ISO timestamp>
 
 ---
 ```
+
+## Handoff Artifact (Context Reset)
+
+After updating progress.md, **always** write `<spec-dir>/handoff.md`. This is the lean context the NEXT agent iteration will load instead of the full artifact set, giving it a clean slate without context anxiety.
+
+Write it with this structure (keep it under 400 words total):
+
+```markdown
+# Handoff Document — Sprint <N>
+
+State: <completed>/<total> tasks | Sprint <N>/<max> | <ISO timestamp>
+Last verdict: <AWAITING_EVAL or PASS:score or NEEDS_REVISION:issues>
+
+## Just Completed
+
+Work unit: <work unit name>
+Files changed: <file1> (<one line summary>), <file2> (<one line summary>)
+Key decisions: <any architectural choices made — one line each>
+
+## What Comes Next
+
+Next work unit: <next incomplete phase/section name>
+Tasks:
+- [ ] <next task 1>
+- [ ] <next task 2>
+(copy 3-5 tasks maximum from tasks.md)
+
+## Active Blockers
+
+<NONE or brief description>
+
+## Critical Context
+
+<Anything the next agent MUST know that isn't obvious from the code:
+gotchas, constraints, known issues, evaluator feedback to address>
+
+## Tech Reference
+
+Stack: <one-line stack summary>
+Entry points: <key files the agent will need>
+```
+
+This replaces the large artifact load on subsequent iterations. Keep it tight — a handoff that is too long defeats its purpose.
 
 ## Checkpoint Commit
 

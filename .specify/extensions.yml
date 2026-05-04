@@ -115,11 +115,12 @@ hooks:
     description: Auto-commit after task generation
     condition: null
   - extension: pro
-    command: speckit.pro.checkpoint
+    command: speckit.pro.contract
     enabled: true
     optional: true
-    prompt: Create a Pro checkpoint after task generation?
-    description: Save a named checkpoint after tasks are generated, before implementation
+    prompt: Generate sprint contract for the next implementation phase?
+    description: Bridges task descriptions to concrete acceptance criteria before
+      the implement loop starts
     condition: null
   after_implement:
   - extension: git
@@ -128,6 +129,14 @@ hooks:
     optional: true
     prompt: Commit implementation changes?
     description: Auto-commit after implementation
+    condition: null
+  - extension: pro
+    command: speckit.pro.evaluate
+    enabled: true
+    optional: true
+    prompt: Run Pro evaluator to grade the implementation against the sprint contract?
+    description: Strict QA review — separate evaluator agent eliminates self-praise
+      bias (Anthropic harness pattern)
     condition: null
   after_checklist:
   - extension: git

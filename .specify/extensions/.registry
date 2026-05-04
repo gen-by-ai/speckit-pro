@@ -34,42 +34,48 @@
       "installed_at": "2026-05-04T05:07:21.083777+00:00"
     },
     "pro": {
-      "version": "1.0.0",
+      "version": "1.2.0",
       "source": "local",
-      "manifest_hash": "sha256:7accd11be7faad8d201988b377c2cb9e1b50f9d78ec612c2f2b1a68059616577",
+      "manifest_hash": "sha256:65ad70afe3c67e64778869e5d7a95844d11673f262f86457bec234d0be4a9f6f",
       "enabled": true,
       "priority": 10,
       "registered_commands": {
         "agy": [
-          "speckit.pro.run",
           "speckit.pro.go",
+          "speckit.pro.run",
+          "speckit.pro.contract",
+          "speckit.pro.checkpoint",
+          "speckit.pro.evaluate",
           "speckit.pro.loop",
           "speckit.pro.status",
           "speckit.pro.resume",
-          "speckit.pro.checkpoint",
           "speckit.pro.compress"
         ],
         "codex": [
-          "speckit.pro.run",
           "speckit.pro.go",
+          "speckit.pro.run",
+          "speckit.pro.contract",
+          "speckit.pro.checkpoint",
+          "speckit.pro.evaluate",
           "speckit.pro.loop",
           "speckit.pro.status",
           "speckit.pro.resume",
-          "speckit.pro.checkpoint",
           "speckit.pro.compress"
         ],
         "copilot": [
-          "speckit.pro.run",
           "speckit.pro.go",
+          "speckit.pro.run",
+          "speckit.pro.contract",
+          "speckit.pro.checkpoint",
+          "speckit.pro.evaluate",
           "speckit.pro.loop",
           "speckit.pro.status",
           "speckit.pro.resume",
-          "speckit.pro.checkpoint",
           "speckit.pro.compress"
         ]
       },
       "registered_skills": [],
-      "installed_at": "2026-05-04T05:37:20.603604+00:00"
+      "installed_at": "2026-05-04T06:15:54.593187+00:00"
     }
   }
 }

@@ -1,11 +1,5 @@
 ---
-name: speckit-pro-run
-description: 'Full autonomous SDD pipeline: invokes native SpecKit commands in sequence
-  with configurable quality gates between phases'
-compatibility: Requires spec-kit project structure with .specify/ directory
-metadata:
-  author: github-spec-kit
-  source: pro:commands/pro.go.md
+description: "Full autonomous SDD pipeline: invokes native SpecKit commands in sequence with configurable quality gates between phases"
 ---
 
 # SpecKit Pro — Pipeline Runner (`pro.go`)

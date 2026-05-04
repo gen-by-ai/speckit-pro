@@ -5,7 +5,7 @@ description: 'Create a named checkpoint: commit all changes, save session snapsh
 compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
-  source: pro:commands/speckit.pro.checkpoint.md
+  source: pro:commands/pro.checkpoint.md
 ---
 
 # SpecKit Pro — Checkpoint
@@ -82,8 +82,8 @@ State saved: <completed>/<total> tasks complete.
   Tasks:   <completed>/<total> (<percentage>%)
   Phase:   <current phase>
 
-To resume from this checkpoint: /speckit.pro.resume
-To view status:                 /speckit.pro.status
+To resume from this checkpoint: /pro.resume
+To view status:                 /pro.status
 ```
 
 ## Graceful Degradation

@@ -80,8 +80,8 @@ State saved: <completed>/<total> tasks complete.
   Tasks:   <completed>/<total> (<percentage>%)
   Phase:   <current phase>
 
-To resume from this checkpoint: /speckit.pro.resume
-To view status:                 /speckit.pro.status
+To resume from this checkpoint: /pro.resume
+To view status:                 /pro.status
 ```
 
 ## Graceful Degradation
