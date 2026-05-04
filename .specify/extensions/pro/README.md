@@ -19,13 +19,14 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 
 | Standard SpecKit | SpecKit Pro |
 |---|---|
-| Each phase requires a manual command | Full pipeline in one command: `/speckit.pro.run` |
+| Each phase requires a manual command | Full pipeline in one command: `/speckit.pro.go` |
 | Manual human gates between all phases | Configurable: gate per phase or fully autonomous |
 | `/speckit.implement` runs one pass | Self-healing loop with circuit breaker and retry |
-| Context grows unbounded over many iterations | Auto context compression at configurable thresholds |
+| No quality gate between tasks and implement | Sprint contracts auto-generated via `after_tasks` hook |
+| No independent QA — agent grades its own work | Separate evaluator agent via `after_implement` hook |
+| Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No session state — can't resume | Full session persistence → `/speckit.pro.resume` |
 | No visibility into autonomous progress | Rich status dashboard → `/speckit.pro.status` |
-| No cross-agent state handoff | `progress.md` + `session.md` carry state between iterations |
 
 ---
 
@@ -49,9 +50,9 @@ specify extension add --dev /path/to/spec-kit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.0.0)
+# ✓ SpecKit Pro (v1.2.0)
 #   Autonomous long-run orchestration
-#   Commands: 6 | Hooks: 1 | Status: Enabled
+#   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
 
 ---
@@ -63,26 +64,32 @@ specify extension list
 Run the complete SDD cycle from description to implementation:
 
 ```
-/speckit.pro.run Build a REST API for managing todo items with user authentication, PostgreSQL backend, and JWT tokens
+/speckit.pro.go Build a REST API for managing todo items with user authentication, PostgreSQL backend, and JWT tokens
 ```
 
 SpecKit Pro will:
-1. Create spec (with human gate to review)
-2. Clarify underspecified areas (auto)
-3. Generate plan (with human gate to review)
-4. Generate tasks (auto)
-5. Run cross-artifact analysis (auto)
-6. Implement autonomously with progress tracking, checkpoints, and self-healing
+1. Run `/speckit.specify` (gate: review spec)
+2. Run `/speckit.clarify` (auto)
+3. Run `/speckit.plan` (gate: review plan)
+4. Run `/speckit.tasks` → `after_tasks` hook auto-generates sprint contract
+5. Run `/speckit.analyze` (auto)
+6. Run the implement loop → `after_implement` hook auto-runs evaluator
 
-### Option B: Autonomous Implementation Loop Only
+### Option B: Native Commands + Pro Hooks
 
-If you've already done specify → plan → tasks with standard SpecKit:
+Run native SpecKit commands as normal — Pro hooks fire automatically:
 
 ```
-/speckit.pro.loop feature=001-my-feature tasks=specs/001-my-feature/tasks.md spec-dir=specs/001-my-feature iteration=1 max=20
+/speckit.tasks          # generates tasks.md
+                        # → speckit.pro.contract fires automatically
+
+/speckit.implement      # implements the feature
+                        # → speckit.pro.evaluate fires automatically
 ```
 
-Or run the orchestrator script directly:
+### Option C: Implementation Loop Only
+
+If you've already done specify → plan → tasks:
 
 ```bash
 .specify/extensions/pro/scripts/bash/pro-orchestrate.sh \
@@ -96,20 +103,32 @@ Or run the orchestrator script directly:
 
 ## Commands
 
-### Core Commands
+### Entry Point
 
 | Command | Description |
 |---|---|
-| `/speckit.pro.run` | Full autonomous SDD pipeline with configurable gates |
-| `/speckit.pro.loop` | Single autonomous iteration (loop worker) |
-| `/speckit.pro.status` | Rich status dashboard |
-| `/speckit.pro.resume` | Resume an interrupted run |
-| `/speckit.pro.checkpoint` | Create a named checkpoint (commit + session log) |
-| `/speckit.pro.compress` | Compress spec artifacts to reduce token usage |
+| `/speckit.pro.go` | Full pipeline: invokes native SpecKit commands in sequence with Pro gates |
 
-### Aliases
+### Hook Commands (also callable manually)
 
-- `/speckit.pro.go` → same as `/speckit.pro.run`
+| Command | Fires automatically | Description |
+|---|---|---|
+| `/speckit.pro.contract` | after `/speckit.tasks` | Generate sprint contract — concrete acceptance criteria before coding |
+| `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation against the sprint contract (separate evaluator agent) |
+| `/speckit.pro.checkpoint` | manual | Commit + session snapshot + progress log entry |
+
+### Loop & Observability
+
+| Command | Description |
+|---|---|
+| `/speckit.pro.loop` | Single autonomous iteration (invoked by orchestrator script) |
+| `/speckit.pro.status` | Rich status dashboard with phase icons and task progress bar |
+| `/speckit.pro.resume` | Resume an interrupted run from last session checkpoint |
+| `/speckit.pro.compress` | Write `handoff.md` — clean context reset for the next sprint |
+
+### Alias
+
+- `/speckit.pro.run` → same as `/speckit.pro.go`
 
 ---
 
@@ -123,15 +142,21 @@ gates:
   after_specify: true   # Review the spec
   after_plan: true      # Review the plan
   after_clarify: false  # Auto-proceed
-  after_tasks: false
+  after_tasks: false    # Contract generated automatically via hook
   after_analyze: false
-  after_implement: false
 
 # Quality steps
 quality:
   run_clarify: true     # Auto-run /speckit.clarify after specify
   run_analyze: true     # Auto-run /speckit.analyze before implement
-  require_checklist: false
+  run_checklist: false
+
+# Generator/evaluator split (Anthropic harness pattern)
+evaluation:
+  enabled: true         # Fire speckit.pro.evaluate after implement
+  threshold: 70         # Minimum score (0-100) for PASS
+  max_revisions: 2      # Generator revision passes before moving on
+  sprint_contracts: true
 
 # Autonomous loop
 loop:
@@ -139,10 +164,10 @@ loop:
   max_consecutive_failures: 3
   checkpoint_frequency: 3   # Commit every N iterations
 
-# Context compression
+# Context resets (not just compression)
 context:
-  auto_compress: false
-  compression_threshold: 5  # Switch to context-summary.md after N iterations
+  reset_mode: true      # Write handoff.md per sprint for clean context resets
+  compression_threshold: 5
 
 # Model & agent
 model: "claude-sonnet-4.6"
@@ -162,39 +187,57 @@ export SPECKIT_PRO_AGENT_CLI="claude"
 ## How the Loop Works
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  pro-orchestrate.sh starts                              │
-│  load config, resolve agent CLI, init progress.md       │
-└───────────────────────────┬─────────────────────────────┘
-                            ▼
-              ┌─────────────────────────┐
-              │  Any tasks remaining?   │──No──▶ exit 0 ✓
-              └──────────┬──────────────┘
-                         │ Yes
-                         ▼
-          ┌──────────────────────────────────┐
-          │  Spawn agent: speckit.pro.loop   │
-          │  Reads: tasks.md + progress.md   │
-          │  Implements ONE work unit        │
-          │  Updates tasks.md + progress.md  │
-          │  Outputs: <pro-status>TAG</pro-status>     │
-          └──────────────┬───────────────────┘
-                         ▼
-          ┌──────────────────────────────────┐
-          │  Parse status tag                │
-          │  COMPLETE → exit 0 ✓             │
-          │  CONTINUE → next iteration       │
-          │  BLOCKED  → increment counter    │
-          │  ERROR    → circuit breaker      │
-          └──────────────┬───────────────────┘
-                         │
-          ┌──────────────▼──────────────┐
-          │  Every N iterations:        │
-          │  git add . && git commit    │
-          │  (checkpoint)               │
-          └─────────────────────────────┘
-                         │
-                  back to top
+┌──────────────────────────────────────────────────────────────┐
+│  pro-orchestrate.sh starts                                   │
+│  load config, resolve agent CLI, init progress.md            │
+└────────────────────────────┬─────────────────────────────────┘
+                             ▼
+               ┌─────────────────────────┐
+               │  Any tasks remaining?   │──No──▶ exit 0 ✓
+               └──────────┬──────────────┘
+                          │ Yes
+                          ▼
+         ┌────────────────────────────────────┐
+         │  Load sprint contract              │
+         │  contracts/sprint-N.md             │
+         │  (generated by speckit.pro.contract│
+         │   via after_tasks hook)            │
+         └──────────────┬─────────────────────┘
+                        ▼
+         ┌──────────────────────────────────────┐
+         │  GENERATOR: speckit.pro.loop         │
+         │  Reads: handoff.md (context reset)   │
+         │  Implements ONE work unit            │
+         │  Implements against contract criteria│
+         │  Updates tasks.md + progress.md      │
+         │  Writes next handoff.md              │
+         │  Outputs: <pro-status>TAG</pro-status>          │
+         └──────────────┬───────────────────────┘
+                        ▼
+         ┌──────────────────────────────────────┐
+         │  EVALUATOR: speckit.pro.evaluate     │
+         │  Fresh agent — no generator context  │
+         │  Reads contract + actual code        │
+         │  PASS → continue                     │
+         │  NEEDS_REVISION → generator retries  │
+         │  FAIL → human review required        │
+         └──────────────┬───────────────────────┘
+                        ▼
+         ┌──────────────────────────────────────┐
+         │  Parse generator status tag          │
+         │  COMPLETE → exit 0 ✓                 │
+         │  CONTINUE → next sprint              │
+         │  BLOCKED  → increment counter        │
+         │  ERROR    → circuit breaker          │
+         └──────────────┬───────────────────────┘
+                        │
+         ┌──────────────▼──────────────┐
+         │  Every N iterations:        │
+         │  git add . && git commit    │
+         │  (speckit.pro.checkpoint)   │
+         └─────────────────────────────┘
+                        │
+                 back to top
 ```
 
 ### Termination Conditions
@@ -236,19 +279,44 @@ Summary: Implemented JWT token generation and validation middleware...
 
 These files allow `/speckit.pro.resume` to pick up exactly where you left off after any interruption.
 
+**`contracts/sprint-N.md`** — Sprint contract (auto-generated by `speckit.pro.contract`):
+```markdown
+# Sprint Contract — Sprint 3
+
+## Acceptance Criteria
+| # | Criterion | Severity | How to Verify |
+|---|---|---|---|
+| 1 | POST /auth/login returns JWT on valid credentials | CRITICAL | curl test |
+| 2 | Returns HTTP 401 for invalid password | CRITICAL | curl test |
+| 3 | Token expires after configured TTL | MEDIUM | decode payload |
+```
+
+**`evaluations/sprint-N.md`** — Evaluator verdict (auto-generated by `speckit.pro.evaluate`):
+```markdown
+# Evaluation — Sprint 3
+Verdict: PASS (score: 82/100)
+CRITICAL: 2/2 pass  MEDIUM: 1/2 pass  LOW: 3/3 pass
+```
+
 ---
 
-## Context Compression
+## Context Resets
 
-For long feature implementations (many tasks, complex specs), run:
+Rather than compressing a growing context (which still causes "context anxiety" in long runs), Pro uses **clean resets**. At the end of each sprint the generator writes `handoff.md` — a lean, structured artifact the next sprint agent loads instead of accumulated history:
 
 ```
 /speckit.pro.compress
 ```
 
-This creates `context-summary.md` — a compressed handoff document (~90% fewer tokens) that the loop worker automatically uses after `compression_threshold` iterations.
+This writes `handoff.md` with only what the next iteration needs:
+- Current task state
+- Relevant architectural decisions
+- Blockers and open questions
+- Files changed so far
 
-Estimated savings: `spec.md (4k) + plan.md (3k) + tasks.md (2k) + progress.md (3k)` → `context-summary.md (~1k)`
+The loop worker automatically loads `handoff.md` on iteration > 1, giving each sprint a clean slate.
+
+Estimated token savings per sprint: `spec.md (4k) + plan.md (3k) + progress.md (3k)` → `handoff.md (~800 tokens)`
 
 ---
 
@@ -269,49 +337,53 @@ SpecKit Pro auto-detects your installed agent CLI. Supported:
 
 ```
 spec-kit-pro/
-├── extension.yml                    # Extension manifest (SpecKit schema v1.0)
+├── extension.yml                  # Extension manifest (SpecKit schema v1.0)
 ├── commands/
-│   ├── speckit.pro.run.md           # Full autonomous pipeline
-│   ├── speckit.pro.loop.md          # Single iteration worker
-│   ├── speckit.pro.status.md        # Status dashboard
-│   ├── speckit.pro.resume.md        # Resume interrupted run
-│   ├── speckit.pro.checkpoint.md    # Named checkpoint
-│   └── speckit.pro.compress.md      # Context compression
+│   ├── pro.go.md                  # → /speckit.pro.go  — thin pipeline runner
+│   ├── pro.contract.md            # → /speckit.pro.contract  — sprint contracts (after_tasks hook)
+│   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator (after_implement hook)
+│   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker
+│   ├── pro.status.md              # → /speckit.pro.status  — status dashboard
+│   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
+│   ├── pro.checkpoint.md          # → /speckit.pro.checkpoint  — named checkpoint
+│   └── pro.compress.md            # → /speckit.pro.compress  — context reset / handoff.md
 ├── scripts/
 │   ├── bash/
-│   │   ├── pro-orchestrate.sh       # Main loop orchestrator (macOS/Linux)
-│   │   ├── pro-status.sh            # Status reporter
-│   │   └── pro-checkpoint.sh        # Checkpoint helper
+│   │   ├── pro-orchestrate.sh     # Gen/eval loop orchestrator (macOS/Linux)
+│   │   ├── pro-status.sh          # Status reporter
+│   │   └── pro-checkpoint.sh      # Checkpoint helper
 │   └── powershell/
-│       └── pro-orchestrate.ps1      # Main loop orchestrator (Windows)
+│       └── pro-orchestrate.ps1    # Gen/eval loop orchestrator (Windows)
 ├── agents/
-│   └── speckit.pro.loop.agent.md    # Loop worker agent profile
+│   └── speckit.pro.loop.agent.md  # Loop worker agent profile
 ├── templates/
-│   ├── session-template.md          # Session state template
-│   └── progress-template.md         # Progress log template
-├── pro-config.template.yml          # Configuration template
+│   ├── session-template.md        # Session state template
+│   ├── progress-template.md       # Progress log template
+│   ├── contract-template.md       # Sprint contract template
+│   └── handoff-template.md        # Context reset handoff template
+├── pro-config.template.yml        # Configuration template
 ├── README.md
 ├── CHANGELOG.md
-└── .extensionignore                 # Distribution exclusions
+└── .extensionignore               # Distribution exclusions
 ```
 
 ---
 
 ## Best Practices for Long Autonomous Runs
 
-1. **Always use the constitution first** — `/speckit.constitution` ensures the agent has firm guardrails for the entire run.
+1. **Always use the constitution first** — `/speckit.constitution` sets project-wide guardrails the agent respects for the entire run.
 
-2. **Set `gates.after_plan: true`** — Review the technical plan before letting the loop run unattended. One bad architectural decision can cascade.
+2. **Gate on plan, not tasks** — Set `gates.after_plan: true`. One bad architectural decision cascades through everything downstream; reviewing the plan is the highest-leverage gate.
 
-3. **Start with `max_iterations: 10`** — Increase after your first successful run. Better to resume than to let a stuck agent loop forever.
+3. **Trust the sprint contract** — The contract is generated before coding starts. If the evaluator fails a sprint, read the contract first — often the generator missed a criterion, not an implementation bug.
 
-4. **Use `checkpoint_frequency: 3`** — Frequent checkpoints make recovery cheap. Each checkpoint is a git commit you can `git reset` to.
+4. **Start with `max_iterations: 10`** — Increase after your first successful run. Circuit-breaker + `/speckit.pro.resume` make short limits safe.
 
-5. **Enable context compression for large features** — Set `context.auto_compress: true` for features with >30 tasks.
+5. **Each checkpoint is a `git reset` point** — Set `checkpoint_frequency: 3`. Recovery from a bad sprint costs at most 3 iterations of work.
 
-6. **Monitor with `/speckit.pro.status`** — Run this in a separate terminal window during autonomous runs.
+6. **Context resets beat compression** — `handoff.md` gives each sprint a clean slate. Long runs with growing context produce worse code as the agent tries to reconcile accumulated history.
 
-7. **Use `--verbose` for debugging** — `/speckit.pro.status --verbose` shows the full iteration log.
+7. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
 
 ---
 
