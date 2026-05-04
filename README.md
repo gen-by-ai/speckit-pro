@@ -42,13 +42,13 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/github/spec-kit-pro/archive/refs/tags/v1.0.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.3.0.zip
 ```
 
 ### From source (local dev)
 
 ```bash
-git clone https://github.com/github/spec-kit-pro
+git clone https://github.com/gen-by-ai/speckit-pro
 cd my-project
 specify extension add --dev /path/to/spec-kit-pro
 ```
