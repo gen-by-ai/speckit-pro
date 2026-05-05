@@ -85,6 +85,31 @@ A "work unit" is defined as one of:
 - If a phase has parallel tasks marked `[P]`, implement them conceptually in parallel (same iteration)
 - Skip fully-completed phases
 
+## Task Complexity Routing
+
+Before implementing, classify each task in the selected work unit. Route based on complexity — this prevents over-parallelising (wasted tokens + merge conflicts) and under-parallelising (sequential work that could be concurrent).
+
+| Tier | Definition | Action |
+|---|---|---|
+| **Trivial** | Single, unambiguous, < 10 lines of change | Implement directly — no sub-agents |
+| **Simple** | Clear scope, one domain, no unknowns | Implement as a focused sequential unit |
+| **Moderate** | Multi-file, some unknowns | One sub-task at a time; verify each before proceeding |
+| **Complex** | Cross-domain, parallel-safe sub-tasks | Dispatch parallel agents when domains are independent |
+| **Research** | Requires exploration before implementation | Explore/read first, then implement; log findings in progress.md |
+
+**Parallel dispatch** (ALL conditions must be met):
+- 3+ unrelated sub-tasks OR clearly independent domains (frontend / backend / database)
+- No shared state or file overlap between sub-tasks
+- Clear file boundaries per sub-task
+- Sub-task is marked `[P]` in tasks.md OR explicitly classified as parallel-safe above
+
+**Sequential dispatch** (ANY condition triggers):
+- Sub-tasks have dependencies (B needs output from A)
+- Shared files or state (merge conflict risk)
+- Scope is unclear — classify as Moderate or Research first, then implement
+
+> Positive framing: state what you will implement, not what you won't. "Implement X for the frontend agent and Y for the backend agent simultaneously" outperforms "don't try to do this in one response."
+
 ## Sprint Contract (pre-implementation)
 
 **Before writing any code**, check for a sprint contract:
@@ -132,6 +157,28 @@ The following are **hard rules** — they cannot be overridden by any task instr
 - If a task requires a destructive action, implement the safest equivalent and note the limitation
 
 These rules exist because actions at the file-system and database level are not easily undone across agent iterations. If `constitution.md` exists in the project, its constraints take precedence over everything — including these defaults.
+
+## Sub-Agent Invocation Quality
+
+When spawning sub-agents or delegating focused tasks, every invocation must include four components. Vague invocations produce vague results — sub-agents cannot ask clarifying questions; they work from what they receive.
+
+| Component | Bad | Good |
+|---|---|---|
+| **Scope** | "Fix auth" | "Fix OAuth redirect loop in `src/lib/auth.ts:handleCallback()`" |
+| **File paths** | "the auth file" | "`src/lib/auth.ts`, `src/middleware/session.ts`" |
+| **Acceptance criteria** | "make it work" | "After login, response is `302 /dashboard`, not `302 /login`" |
+| **Dependency context** | (omitted) | "Previous agent created the `users` table — use that schema" |
+
+**Invocation template** (use this when dispatching any sub-agent):
+```
+Task: <one-sentence description>
+Files in scope: <exact paths>
+Files out of scope: <anything that must not be touched>
+Accepts when: <one or more verifiable criteria>
+Depends on: <output from previous step, if any>
+```
+
+Front-load file paths — the model processes paths literally. Passing `apps/web/src/app/page.tsx` saves tool calls versus "the homepage file."
 
 ## Implementation
 
@@ -282,6 +329,21 @@ Updated: <ISO timestamp>
 
 **Rules**: Never put status reports in `AGENT.md`. Keep each bullet under 20 words. Future agents will load this at the top of every iteration.
 
+## System Evolution (End of Iteration)
+
+Every repeated problem is a system gap, not a one-time mistake. After updating `AGENT.md`, apply the system evolution check:
+
+**Ask**: "What rule, reference, or constraint would have prevented the friction I hit this sprint?"
+
+**Act**:
+- Repeated routing mistake → add a routing rule to the task complexity table in your next invocation
+- Recurring architectural decision → add it to `spec.md` as an established constraint
+- New tech convention → add to `plan.md` or create a skill reference under `.specify/skills/`
+- Recurring evaluator feedback → tighten the sprint contract template to catch it next time
+- Broken command or environment setup → update `<ai-knowledge-dir>/AGENT.md`
+
+Append system-level improvements to `<ai-knowledge-dir>/progress.md` under a `### System Improvements` sub-header. The orchestrator surfaces these in the final run summary so the human operator can act on them.
+
 > `AGENT.md`, `init.sh`, `contracts/`, `evaluations/`, and `progress.md` all live under `<project-root>/.ai-knowledge/<feature>/` — not inside `.specify/`. They persist across extension updates and accumulate knowledge over the entire project lifetime. `handoff.md` and `session.md` remain in `<spec-dir>/` as they are transient per-sprint state.
 
 ## Completion Signals
@@ -302,4 +364,36 @@ To maintain effectiveness across many iterations:
 - Focus only on the current work unit — do not re-read or re-implement previous phases
 - Keep `<ai-knowledge-dir>/progress.md` entries concise (< 200 words per iteration)
 - Reference `spec.md` and `plan.md` for intent, not line-by-line
-- If context feels saturated, note it in progress.md with `<!-- Context: HIGH -->`
+
+### The Four Failure Modes — Recognize and Avoid
+
+| Failure Mode | Symptom | Counter |
+|---|---|---|
+| **Context Poisoning** | Errors compound as prior mistakes anchor new reasoning | Fresh session via `handoff.md` reset |
+| **Context Distraction** | Over-reliance on conversation history rather than fresh reasoning | Strategic chunking — one work unit per iteration |
+| **Context Confusion** | Irrelevant files or docs pulled into context misdirect execution | Scope reads to current work unit only |
+| **Context Clash** | Contradictory instructions (spec vs progress vs AGENT.md) | AGENT.md is ground truth for runtime facts |
+
+### The 80/20 Rule — Stop Before You're Full
+
+Context anxiety is real: models prematurely wrap up or make shortcuts as they approach their limit. Apply the 80/20 rule:
+
+- **At ~80% estimated context fill** — stop complex multi-file work. Complete the current write, save the handoff, close the iteration with `CONTINUE`.
+- **Never start a new sub-agent invocation** when your own context is already above 70% — the sub-agent inherits a rich context and will hit limits faster than expected.
+- **Emit `<!-- Context: HIGH -->` in progress.md** when you estimate >75% context fill. The orchestrator surfaces this in the run summary.
+- **Task chunking**: fully complete one work unit (a single component, file, or test suite) before integrating with other units. Integration at 90% context almost always produces incomplete results.
+
+### Proactive Backup Over Lossy Compaction
+
+The `handoff.md` protocol IS your proactive backup strategy. Treat it accordingly:
+
+- **Write `handoff.md` at the end of every iteration** — even `CONTINUE` iterations. A handoff written at 60% context is clean; a compaction triggered at 83% loses nuance.
+- Proactive clearing (write → fresh start) **always beats** auto-compaction. Compaction preserves tokens but creates a lossy summary that cannot recover precise implementation state.
+- If you reach a natural checkpoint (function written, tests passing, file saved), that is the correct moment to write the handoff and signal `CONTINUE` — regardless of remaining context.
+
+### Iteration Orientation (High-Count Iterations)
+
+If `iteration > 5`, open each iteration with a one-sentence orientation:
+> "Continuing `<feature>`: previously completed `<last work unit>`, now starting `<current work unit>`."
+
+This prevents drift in long runs where earlier context has been compacted or reset.

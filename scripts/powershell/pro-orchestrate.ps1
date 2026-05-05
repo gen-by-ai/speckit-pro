@@ -24,6 +24,11 @@ param(
     [Parameter(Mandatory=$false)] [int]   $CheckpointFrequency = 3,
     [Parameter(Mandatory=$false)] [string]$Model = "claude-sonnet-4.6",
     [Parameter(Mandatory=$false)] [string]$AgentCli = "copilot",
+    [Parameter(Mandatory=$false)] [string]$SubagentModel = "",
+    [Parameter(Mandatory=$false)] [string]$EffortPlanning = "xhigh",
+    [Parameter(Mandatory=$false)] [string]$EffortExecution = "high",
+    [Parameter(Mandatory=$false)] [string]$EffortVerification = "xhigh",
+    [Parameter(Mandatory=$false)] [string]$EffortExploratory = "medium",
     [Parameter(Mandatory=$false)] [switch]$Resume
 )
 
@@ -33,6 +38,13 @@ $ErrorActionPreference = "Stop"
 # ─── Paths ───────────────────────────────────────────────────────────────────
 $ProgressFile = Join-Path $SpecDir "progress.md"
 $SessionFile  = Join-Path $SpecDir "session.md"
+
+# ─── Effort / Sub-agent env exports ──────────────────────────────────────────
+if ($SubagentModel -ne "") { $env:CLAUDE_CODE_SUBAGENT_MODEL = $SubagentModel }
+$env:SPECKIT_EFFORT_PLANNING      = $EffortPlanning
+$env:SPECKIT_EFFORT_EXECUTION     = $EffortExecution
+$env:SPECKIT_EFFORT_VERIFICATION  = $EffortVerification
+$env:SPECKIT_EFFORT_EXPLORATORY   = $EffortExploratory
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
 function Write-ProInfo    { Write-Host "[Pro] $args" -ForegroundColor Cyan }
@@ -200,13 +212,16 @@ if (Test-AllTasksDone) {
 Update-Session "implement" "started" "Autonomous loop starting at iteration $iteration"
 
 Write-Host ""
+$subagentDisplay = if ($SubagentModel -ne "") { $SubagentModel } else { "(same as model)" }
 Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
 Write-Host "║  SpecKit Pro — Autonomous Implementation Loop        ║" -ForegroundColor Green
 Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Green
-Write-Host "║  Feature:    $FeatureName" -ForegroundColor Green
-Write-Host "║  Max iter:   $MaxIterations | Checkpoints every $CheckpointFrequency" -ForegroundColor Green
-Write-Host "║  Model:      $Model" -ForegroundColor Green
-Write-Host "║  Agent CLI:  $resolvedCli" -ForegroundColor Green
+Write-Host "║  Feature:     $FeatureName" -ForegroundColor Green
+Write-Host "║  Max iter:    $MaxIterations | Checkpoints every $CheckpointFrequency" -ForegroundColor Green
+Write-Host "║  Model:       $Model" -ForegroundColor Green
+Write-Host "║  Sub-agent:   $subagentDisplay" -ForegroundColor Green
+Write-Host "║  Agent CLI:   $resolvedCli" -ForegroundColor Green
+Write-Host "║  Effort:      plan=$EffortPlanning exec=$EffortExecution verify=$EffortVerification" -ForegroundColor Green
 Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
 

@@ -107,10 +107,47 @@ context:
   # Auto-run /speckit.pro.compress before starting the implement loop
   auto_compress: false
 
+  # Controls when Claude Code's auto-compaction fires.
+  # Compaction fires at ~83.5% by default (after the 33K output buffer is reserved).
+  # Set higher (e.g. 90) to squeeze more usable context before it fires.
+  # Set lower (e.g. 70) for earlier, more conservative compaction on complex features.
+  # Range: 1–100. Set to null to use Claude Code's built-in default.
+  # Env: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+  # Note: proactive handoff.md resets (reset_mode: true) are preferred over compaction
+  #       for long autonomous runs — compaction is lossy; handoffs are precise.
+  autocompact_pct_override: ~  # null = use Claude Code default (~83.5%)
+
+# ── Effort Level Settings ─────────────────────────────────────────────────────
+# Inspired by: https://claudefa.st/blog/guide/development/opus-4-7-best-practices
+#
+# Opus 4.7+ uses adaptive thinking — effort level is the primary cost/quality lever.
+# Set per-phase effort to prevent over-spending on low-stakes work while keeping
+# quality high where it compounds (planning, verification).
+#
+# Supported values: low | medium | high | xhigh | max
+# Env override: SPECKIT_PRO_EFFORT_<PHASE> (e.g. SPECKIT_PRO_EFFORT_PLANNING=max)
+effort:
+  # Specify → Plan → Tasks phases — plan quality compounds into every execution step
+  planning: "xhigh"
+  # Implementation — specialists working from clear, pre-written plans
+  execution: "high"
+  # Evaluate, verify, security-audit — catching drift before it ships
+  verification: "xhigh"
+  # Exploratory research, docs lookups — cost-sensitive, not quality-critical
+  exploratory: "medium"
+
 # ── Model & Agent Settings ───────────────────────────────────────────────────
 # AI model to use for autonomous iterations
 # Common values: claude-sonnet-4.6, gpt-4.1, gemini-2.5-pro, claude-opus-4-5
 model: "claude-sonnet-4.6"
+
+# Sub-agent model (optional). When set, focused sub-agents run on this model
+# while the orchestrator uses the primary `model`. A common pattern is Opus
+# for orchestration and Sonnet for well-scoped sub-tasks — cuts cost without
+# sacrificing quality on focused, clearly-scoped work.
+# Leave empty to use the same model as the orchestrator.
+# Env override: CLAUDE_CODE_SUBAGENT_MODEL
+subagent_model: ""  # e.g. "claude-sonnet-4.6"
 
 # Agent CLI binary name or path
 # Supported: copilot, claude, gemini, codex, cursor
