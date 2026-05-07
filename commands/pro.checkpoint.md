@@ -39,12 +39,25 @@ If `$ARGUMENTS` provides a label, use it. Otherwise auto-generate:
 
 ### 3. Stage and commit
 
+Use **PR-safe staging** — never include `.ai-knowledge/` (machine-generated workspace state). Default is also to exclude `specs/` unless `commit_artifacts: true` is set in `pro-config.yml`:
+
 ```bash
-git add .
+# Always exclude .ai-knowledge/. Exclude specs/ unless commit_artifacts is true.
+git add -- ':!.ai-knowledge' ':!.ai-knowledge/**' \
+  $([ "$COMMIT_ARTIFACTS" = "true" ] || echo "':!specs' ':!specs/**'") .
+
 git commit -m "[Pro] Checkpoint: <label> (<completed>/<total> tasks, phase: <phase>)"
 ```
 
 If there are no changes to commit: output `[Pro] Checkpoint skipped — no uncommitted changes.` and continue.
+
+**Sanity check** after staging:
+```bash
+git diff --cached --name-only | grep -E '^\.ai-knowledge/' && {
+  echo "[Pro] Refusing to commit workspace-only paths — unstage and retry."
+  exit 1
+}
+```
 
 ### 4. Append checkpoint entry to session.md
 

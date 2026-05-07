@@ -14,7 +14,53 @@ $ARGUMENTS
 
 The arguments are passed as the feature description to `/speckit.specify`. If empty, ask the user for a feature description before proceeding.
 
-## Pre-Flight
+## Pre-Flight: Existing-Feature Scan
+
+Before generating a new spec, check whether the same work is already in flight. The single biggest reason features stall is duplicate planning — a new spec is created when an old one already covers the work.
+
+1. **Detect the project root and specs directory**
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   SPECS_DIR="$PROJECT_ROOT/specs"
+   ```
+
+2. **Ticket-ID match** — extract any `[A-Z]+-[0-9]+` patterns from `$ARGUMENTS` (Jira-style: `MP-1408`, `FDT-696`). For each ticket found, grep `specs/*/spec.md` and `specs/*/plan.md` for the same ticket. Also match the ticket against directory names (case-insensitive).
+
+3. **Title match** — extract the 3 most distinctive nouns from `$ARGUMENTS` (skip stop-words). Grep `specs/*/spec.md` H1 headings for any of them.
+
+4. **Phase classification** — for any feature dir that matches, classify its current phase by which artifacts exist:
+
+   | Artifacts present | Phase | Suggested entry |
+   |---|---|---|
+   | spec.md only | `spec-only` | `/speckit.plan` |
+   | spec.md + plan.md | `plan-only` | `/speckit.tasks` |
+   | spec.md + plan.md + tasks.md (no contracts/) | `tasks-only` | `/pro.contract` then `/pro.pickup <feature>` |
+   | + contracts/ but no `.ai-knowledge/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
+   | + `.ai-knowledge/<feature>/` exists | `in-loop` | `/pro.resume` |
+   | tasks.md fully checked off | `complete` | (none — already done) |
+
+5. **Decision prompt** — if any matches found:
+   ```
+   ┌──────────────────────────────────────────────────────────────┐
+   │  Possible overlap with existing feature(s):                  │
+   │                                                              │
+   │  • specs/<feature-1>  [phase: contracts-ready]               │
+   │    Match: ticket MP-1408 in spec.md                          │
+   │    → /pro.pickup <feature-1>                                 │
+   │                                                              │
+   │  • specs/<feature-2>  [phase: plan-only]                     │
+   │    Match: title nouns "payment", "retry"                     │
+   │    → /speckit.tasks then /pro.pickup <feature-2>             │
+   └──────────────────────────────────────────────────────────────┘
+   Resume one of these (1, 2, ...), start fresh anyway (n), or abort (a)?
+   ```
+   - `1`/`2` → invoke `/pro.pickup <feature>` and STOP this command.
+   - `n` → continue to the run plan below.
+   - `a` → abort.
+
+6. **No matches** — silently continue to the run plan. Print one line: `[Pro] No overlapping features found — starting fresh.`
+
+## Run Plan
 
 Load config from `.specify/extensions/pro/pro-config.yml` (fall back to defaults):
 
@@ -49,6 +95,8 @@ Display the run plan and ask "Proceed? (yes/no)":
 
 If the user says no: `Pipeline cancelled. Run /pro.go <description> to start again.`
 
+> **Tip**: If you only want to *implement* an existing spec (not regenerate it), use `/pro.pickup <feature-dir>` instead — it skips planning and starts the loop directly.
+
 ## Phase Protocol
 
 For each phase: **announce → execute → gate → update session**.
@@ -66,6 +114,40 @@ For each phase: **announce → execute → gate → update session**.
 EXECUTE_COMMAND: /speckit.specify <$ARGUMENTS>
 ```
 Gate: `gates.after_specify`
+
+### Phase 1b — Branch Convention Check
+
+`/speckit.specify` creates a feature branch named `NNN-feature-name` (e.g. `001-payment-retry`). Many teams use a different convention (e.g. `<initials>/<TICKET>-<short>`, `feature/<TICKET>`, `dev/<area>/<short>`). Renaming the branch *before* any commits land avoids a force-push later.
+
+1. **Look for a documented convention** (in priority order):
+   - `.claude/rules/branch-naming*.md`
+   - `.cursor/rules/branch-naming*.md` / `.cursor/rules/branch-naming*.mdc`
+   - `CONTRIBUTING.md` — grep for "branch" in headings
+   If found, parse the rule and skip to step 3.
+
+2. **Heuristic from recent branches** (only if no rule file found):
+   ```bash
+   git for-each-ref --sort=-committerdate --count=30 \
+     --format='%(refname:short)' refs/heads/ refs/remotes/origin/
+   ```
+   Strip `origin/` prefix. Look for a recurring pattern that **isn't** `^[0-9]{3}-`. If ≥ 3 of the last 30 branches share a non-default prefix structure (e.g. `xx/PROJ-####-...`, `feature/PROJ-####`, `bugfix/...`), treat that as the team convention.
+
+3. **Prompt to rename** (if a convention was detected and current branch matches `^[0-9]{3}-`):
+   ```
+   Detected branch convention: <pattern> (e.g. <example from history>)
+   Current branch: <NNN-feature-name>
+   Rename to match? Suggested: <generated-name>
+   (y / n / custom <name>)
+   ```
+   - `y` → `git branch -m <NNN-feature-name> <new-name>`
+   - `custom <name>` → `git branch -m <NNN-feature-name> <name>`
+   - `n` → keep as-is.
+
+4. **Note the post-rename caveat**: SpecKit's `check-prerequisites.sh` validates the branch matches `^[0-9]{3}-` and may print "Not on a feature branch". The spec directory still works — that script is informational, not blocking. Print this once so the user isn't surprised.
+
+5. **Skip silently** if: no convention detected, current branch already non-default, or running on `main`/`trunk` (which means the user has their own branching strategy already).
+
+No gate.
 
 ### Phase 2 — Clarify
 Skip if `quality.run_clarify: false`.
@@ -105,59 +187,115 @@ If analyze reports CRITICAL issues, pause regardless of gate setting:
 
 ### Phase 5b — Initializer Setup
 
-Before the implement loop, ensure `<AI_KNOWLEDGE_DIR>/init.sh` exists. This script is how every future loop iteration verifies the app is still runnable before picking up new work.
+Before the implement loop, set up the workspace state directory. This phase has four steps: derive paths, write `.gitignore` rules, generate a stack-aware `init.sh`, and seed `AGENT.md` with real project facts (not placeholders).
 
-Derive `<AI_KNOWLEDGE_DIR>` now:
+#### 5b.1 — Derive paths
+
 ```bash
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/<feature-slug>"
-mkdir -p "$AI_KNOWLEDGE_DIR"
+mkdir -p "$AI_KNOWLEDGE_DIR/contracts" "$AI_KNOWLEDGE_DIR/evaluations"
 ```
 
-**If `<AI_KNOWLEDGE_DIR>/init.sh` does not exist**, generate it now by reading `plan.md` to understand the tech stack. The script must:
-1. Start the development server (or compile the project)
-2. Run a basic smoke test (e.g., `curl http://localhost:PORT/health` or run the test suite with a short timeout)
-3. Exit `0` on success, non-zero on failure
+#### 5b.2 — Ensure `.gitignore` excludes workspace state
 
-Example template:
+`.ai-knowledge/` is machine-generated workspace state and **must not** land in feature-branch commits intended for PR review. Read `<PROJECT_ROOT>/.gitignore`. If it does not contain `.ai-knowledge/` (or `.ai-knowledge`), append:
+
+```
+# SpecKit Pro — workspace-only autonomous-run state
+.ai-knowledge/
+```
+
+For `specs/`, behavior depends on `commit_artifacts` config (default `false`):
+- `commit_artifacts: false` — also append `specs/` to `.gitignore` and warn:
+  ```
+  [Pro] Note: specs/ is now gitignored. To share specs with teammates, set commit_artifacts: true in pro-config.yml.
+  ```
+- `commit_artifacts: true` — leave `specs/` alone; the team versions specs intentionally.
+
+If `.gitignore` already contains either pattern, skip silently.
+
+#### 5b.3 — Stack-aware `init.sh`
+
+If `<AI_KNOWLEDGE_DIR>/init.sh` already exists, skip. Otherwise, **detect the stack** by checking which markers exist in `<PROJECT_ROOT>` (or in the most relevant subdir per `plan.md`):
+
+| Marker | Stack | Default smoke test |
+|---|---|---|
+| `package.json` with `tsconfig.json` | TypeScript / Node | `tsc --noEmit` (scoped to feature dirs if repo is large) |
+| `package.json` no TS | Node | `node -e "require('./package.json')"` + `npm run lint` if defined |
+| `go.mod` | Go | `go build ./...` |
+| `pyproject.toml` or `requirements.txt` | Python | `python -c "import <main_module>"` + `ruff check` if available |
+| `Cargo.toml` | Rust | `cargo check --all-targets` |
+| `Gemfile` | Ruby | `bundle exec rake -T > /dev/null` |
+| Multiple / unclear | mixed | fallback: just print `OK` and let the loop populate it later |
+
+For large monorepos, **scope the smoke test to files the feature touches**. Read `plan.md` for the touched paths and constrain the check to those (e.g. `tsc --noEmit` against a tsconfig that only includes the feature dir). The user's auto-memory often contains hints like "Local backend tests don't work" — if such a memory exists, prefer compile-only checks over runtime tests.
+
+Generate a real, runnable script — not commented-out placeholders:
+
 ```bash
 #!/usr/bin/env bash
+# init.sh — smoke test for autonomous loop iterations
+# Generated <ISO timestamp> by /pro.go for feature: <feature-slug>
+# Edit freely; the loop runs this at the top of every iteration.
 set -e
 
-# Start dev server in background (adjust for your stack)
-# npm run dev &  OR  uvicorn main:app &  OR  go run . &
-# SERVER_PID=$!
+cd "$(git rev-parse --show-toplevel)"
 
-# Wait and smoke test
-# sleep 3
-# curl -sf http://localhost:3000 > /dev/null || exit 1
+# <stack-specific commands here, derived from detection>
 
-echo "Smoke test: OK"
-# kill $SERVER_PID 2>/dev/null || true
+echo "[init.sh] smoke test: OK"
 ```
 
-After generating, make it executable: `chmod +x <AI_KNOWLEDGE_DIR>/init.sh`.
+Make executable: `chmod +x "$AI_KNOWLEDGE_DIR/init.sh"`.
 
-Also create `<AI_KNOWLEDGE_DIR>/AGENT.md` if it does not exist, seeded with what you know from plan.md:
+#### 5b.4 — AGENT.md prepopulation
+
+Create `<AI_KNOWLEDGE_DIR>/AGENT.md` only if it doesn't already exist. Seed it from real project files, not placeholders. Read these in parallel and extract relevant lines:
+
+- **`package.json`** scripts → `dev`, `start`, `test`, `lint`, `build`, `typecheck`
+- **`Makefile`** → first 30 targets (or all `## comment`-style documented targets)
+- **`.github/workflows/*.yml`** — `run:` lines in any `lint`, `test`, `typecheck`, `format` jobs (these are the canonical CI commands; running them locally before committing avoids CI surprises)
+- **`.claude/rules/*.md`** + **`.cursor/rules/*.mdc`** — project conventions; quote any rule headings + first sentence
+- **`CLAUDE.md`** / **`.cursorrules`** / **`AGENTS.md`** at project root — paste relevant short excerpts (max ~500 chars total)
+- **Project memory** — if `~/.claude/projects/-<encoded-project-path>/memory/` exists, scan `feedback_*.md` and `reference_*.md` for entries whose names suggest project-relevance (testing, lint, build, branch, CI, deploy). Pull each entry's one-line summary into Known Gotchas.
+
+Layout:
+
 ```markdown
 # Project Agent Notes
 
-Updated: <ISO timestamp>
+Generated: <ISO timestamp> (by /pro.go for <feature-slug>)
+Last updated: <ISO timestamp>
 
 ## How to Start the App
-<commands from plan.md>
+- `<command from package.json:scripts.dev or start>` — dev server
+- `<command from Makefile dev target if exists>`
 
 ## How to Run Tests
-<test commands from plan.md>
+- Unit: `<from package.json:scripts.test or go test ./... etc>`
+- Lint: `<lint command — exact same one CI runs>`
+- Typecheck: `<from scripts.typecheck or tsc --noEmit>`
+- (Note: if local tests require Docker/services not available, prefer compile-only — let CI run the full suite)
+
+## CI Commands (from .github/workflows)
+- `<job name>`: `<command>` ← the loop should run this before declaring done
+- ...
+
+## Project Conventions (from .claude/rules, .cursor/rules)
+- <rule heading>: <one-line summary>
+- ...
 
 ## Known Gotchas
-(none yet)
+- <from project memory entries — keep verbatim where possible>
 
 ## Build Learnings
-(populated by loop iterations)
+(populated by loop iterations — do not edit; the loop appends here)
 ```
 
-These files live at the **project root** under `.ai-knowledge/<feature-slug>/` — not inside `.specify/`. They persist across extension updates and accumulate across the entire project lifetime.
+**Why prepopulate**: the loop currently *discovers* facts like "yarn test needs Docker" mid-sprint and writes them in. Seeding AGENT.md from CI workflows + project rules + memory shortcuts that discovery and prevents iteration 1 from failing on environmental issues that were already known.
+
+These files live at **project root** under `.ai-knowledge/<feature-slug>/`. They persist across extension updates.
 
 ### Phase 6 — Implement Loop
 

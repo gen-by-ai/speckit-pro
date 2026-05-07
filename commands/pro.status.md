@@ -21,7 +21,61 @@ Optional flags in `$ARGUMENTS`:
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json` to detect `FEATURE_DIR`.
 2. If `--feature` was provided, use that feature name to locate its spec directory.
-3. If no feature is found, output: `[Pro] No active feature found. Run /pro.run <description> to start.`
+3. If no single active feature is found, **fall through to Workspace Overview Mode** (below) instead of erroring out — the most common reason there's no active feature is that several were planned but none entered the loop, and the user wants to see them all to decide which to pick up.
+
+## Workspace Overview Mode
+
+Triggered when no active feature is detected, or when user passes `--workspace` explicitly. Shows every feature under `specs/` with its current phase and the suggested entry command.
+
+### Data Collection
+
+```bash
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+SPECS_DIR="$PROJECT_ROOT/specs"
+AI_KNOWLEDGE_ROOT="$PROJECT_ROOT/.ai-knowledge"
+```
+
+For each subdirectory under `specs/`:
+
+| Artifacts present | Phase | Suggested entry |
+|---|---|---|
+| `spec.md` only | `spec-only` | `/speckit.plan` |
+| + `plan.md` | `plan-only` | `/speckit.tasks` |
+| + `tasks.md` (any `[ ]`), no contracts/ | `tasks-only` | `/pro.contract` then `/pro.pickup <feature>` |
+| + contracts/, no `<AI_KNOWLEDGE_ROOT>/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
+| `<AI_KNOWLEDGE_ROOT>/<feature>/progress.md` exists, tasks remain | `in-loop` | `/pro.resume` |
+| All `[x]` in tasks.md | `complete` | (none — done) |
+
+Render:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  SpecKit Pro — Workspace Overview                            ║
+╠══════════════════════════════════════════════════════════════╣
+║  Feature                          Phase            Tasks      ║
+╠══════════════════════════════════════════════════════════════╣
+║  001-MP-1242-ensure-2-decimals    tasks-only       0/8        ║
+║  002-payment-method               plan-only         —         ║
+║  003-mp-1151-kb                   plan-only         —         ║
+║  005-ipf-retry-type-flag          contracts-ready  0/12       ║
+║  008-payment-method-audit-log     in-loop          8/11 (73%) ║
+║  009-greenhouse-deflection        complete         24/24      ║
+╠══════════════════════════════════════════════════════════════╣
+║  PICKUP HINTS                                                 ║
+╠══════════════════════════════════════════════════════════════╣
+║  • /pro.pickup 005-ipf-retry-type-flag  — closest to running  ║
+║  • /pro.resume                          — continue 008        ║
+║  • /speckit.tasks                       — unblock 002, 003    ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+Sort: `in-loop` first, then `contracts-ready`, then `tasks-only`, then `plan-only`, then `spec-only`, with `complete` at the bottom.
+
+If `--json` is passed in workspace mode, output a list of feature objects with `{ name, phase, tasks: { total, completed }, suggested_command }`.
+
+## Single-Feature Mode
+
+Used when a feature is detected (or `--feature <name>` is provided).
 
 ## Data Collection
 

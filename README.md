@@ -126,11 +126,12 @@ If you've already done specify → plan → tasks:
 
 ## Commands
 
-### Entry Point
+### Entry Points
 
 | Command | Description |
 |---|---|
-| `/speckit.pro.go` | Full pipeline: invokes native SpecKit commands in sequence with Pro gates |
+| `/speckit.pro.go <description>` | Full pipeline from a fresh idea: specify → clarify → plan → tasks → implement. Pre-flight scans `specs/` for tickets/title nouns already in flight and offers to resume those instead of duplicating planning. |
+| `/speckit.pro.pickup <feature>` | Pick up an existing feature that has spec/plan/tasks but never started the loop. Auto-detects the stuck phase and runs only the missing prerequisites before starting. The most common entry point in real projects — most features stall after `/speckit.tasks`. |
 
 ### Hook Commands (also callable manually)
 
@@ -145,7 +146,7 @@ If you've already done specify → plan → tasks:
 | Command | Description |
 |---|---|
 | `/speckit.pro.loop` | Single autonomous iteration (invoked by orchestrator script) |
-| `/speckit.pro.status` | Rich status dashboard with phase icons and task progress bar |
+| `/speckit.pro.status` | Rich status dashboard. With no feature arg, falls through to **Workspace Overview Mode** — lists every feature in `specs/` with its detected phase (`spec-only` / `plan-only` / `tasks-only` / `contracts-ready` / `in-loop` / `complete`) and the suggested pickup command. |
 | `/speckit.pro.resume` | Resume an interrupted run from last session checkpoint |
 | `/speckit.pro.compress` | Write `handoff.md` — clean context reset for the next sprint |
 
@@ -416,13 +417,14 @@ SpecKit Pro auto-detects your installed agent CLI. Supported:
 speckit-pro/
 ├── extension.yml                  # Extension manifest (SpecKit schema v1.0)
 ├── commands/
-│   ├── pro.go.md                  # → /speckit.pro.go  — thin pipeline runner
+│   ├── pro.go.md                  # → /speckit.pro.go  — pipeline runner with overlap-aware pre-flight + branch convention check
+│   ├── pro.pickup.md              # → /speckit.pro.pickup  — entry point for stuck-but-planned features
 │   ├── pro.contract.md            # → /speckit.pro.contract  — sprint contracts (after_tasks hook)
 │   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator with agent-browser (after_implement hook)
-│   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update
-│   ├── pro.status.md              # → /speckit.pro.status  — status dashboard
+│   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update + PR-safe checkpoints
+│   ├── pro.status.md              # → /speckit.pro.status  — single-feature dashboard + workspace overview mode
 │   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
-│   ├── pro.checkpoint.md          # → /speckit.pro.checkpoint  — named checkpoint
+│   ├── pro.checkpoint.md          # → /speckit.pro.checkpoint  — named checkpoint with PR-safe staging
 │   └── pro.compress.md            # → /speckit.pro.compress  — context reset / handoff.md
 ├── scripts/
 │   ├── bash/
@@ -482,7 +484,11 @@ speckit-pro/
 
 10. **The Scope of Autonomy hard rules protect you** — The loop will never delete files, push to remote, or run destructive DB operations on its own. If a task genuinely requires one of these, the loop will emit `BLOCKED` and wait for you.
 
-11. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log.
+11. **Monitor with `/speckit.pro.status`** — Run in a separate terminal during autonomous work. Use `--verbose` to see the full evaluator log. Without args, it shows a workspace overview of every planned-but-unimplemented feature with pickup hints.
+
+12. **Pick up before you plan again** — Before starting a new feature, run `/speckit.pro.status` (workspace mode) to see what's already partially planned. `/pro.go`'s pre-flight scan catches ticket-ID and title overlap automatically, but a quick visual scan is faster. The most common stall pattern is "spec exists, never ran" — `/pro.pickup <feature>` is the fix.
+
+13. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
 
 ---
 

@@ -162,6 +162,43 @@ checkpoint:
   # Include feature name in checkpoint commit messages
   include_feature_name: true
 
+# ── Commit Scope (PR-safety) ──────────────────────────────────────────────────
+# Controls what files end up in feature-branch commits. The default is "PR-safe":
+# workspace-only state stays out of commits intended for review.
+commit:
+  # Whether to include specs/ and .ai-knowledge/ in checkpoint commits.
+  #
+  # false (default, recommended):
+  #   - Checkpoints stage code only — never .ai-knowledge/, never specs/
+  #   - tasks.md [ ] → [x] updates are tracked locally but not committed
+  #   - PRs review only production code, no SpecKit artifacts
+  #   - Avoids the common pain of force-pushing to remove SpecKit artifacts before PR
+  #
+  # true:
+  #   - Checkpoints include specs/ (for teams that version specs intentionally)
+  #   - .ai-knowledge/ is STILL excluded (it's machine-generated workspace state)
+  #   - Use this if your team wants spec.md, plan.md, tasks.md to live in git history
+  commit_artifacts: false
+
+  # Auto-append .ai-knowledge/ (and specs/ when commit_artifacts: false) to .gitignore
+  # during Phase 5b. Most teams want this; disable if you manage .gitignore manually.
+  auto_gitignore: true
+
+# ── Pickup / Existing-Feature Scan ────────────────────────────────────────────
+# Controls how /pro.go's pre-flight detects existing features that overlap with
+# the requested work. The biggest source of stuck features in real projects is
+# duplicate planning — a new spec is created when an old one already covers it.
+pickup:
+  # Scan specs/*/spec.md and plan.md for ticket IDs (regex [A-Z]+-[0-9]+) in $ARGUMENTS
+  ticket_match: true
+
+  # Heuristic title-noun match against existing spec H1 headings
+  title_match: true
+
+  # After /speckit.specify creates an NNN-feature-name branch, scan recent branches
+  # and project rule files for a different naming convention; prompt to rename.
+  branch_rename_prompt: true
+
 # ── Notification Settings ─────────────────────────────────────────────────────
 # (Future: webhook/notification integration)
 notify:

@@ -48,7 +48,9 @@ Create it if it doesn't exist: `mkdir -p "$AI_KNOWLEDGE_DIR"`
    - Load `<spec-dir>/tasks.md` — to find next incomplete work unit
    - Do NOT load spec.md, plan.md, or progress.md unless you need a specific detail not in handoff.md
 
-   **Otherwise** (first iteration or no handoff):
+   **Legacy fallback**: if `handoff.md` is missing but `<spec-dir>/context-summary.md` exists (from pre-v1.5 SpecKit Pro runs), treat it as a handoff substitute. Load it instead of the full artifact set, and write a fresh `handoff.md` at the end of this iteration so subsequent iterations use the new schema.
+
+   **Otherwise** (first iteration or no handoff/summary):
    - `<spec-dir>/spec.md` — requirements and user stories
    - `<spec-dir>/plan.md` — technical architecture
    - `<spec-dir>/tasks.md` — task checklist with completion state
@@ -150,6 +152,7 @@ The following are **hard rules** — they cannot be overridden by any task instr
 - Push to any remote git repository (`git push`)
 - Overwrite a file that did not exist before this sprint without noting it in `progress.md`
 - Run any command with `--force` or `-f` flags unless AGENT.md explicitly records it as safe
+- Stage `.ai-knowledge/` paths in any commit — workspace-only state must never reach a feature branch destined for PR review (see Checkpoint Commit Scope below)
 
 **Prefer reversible over irreversible:**
 - Favour additive changes (add a new function, add a new route) over modifying existing ones when both achieve the goal
@@ -293,11 +296,37 @@ This replaces the large artifact load on subsequent iterations. Keep it tight �
 
 If `iteration % checkpoint_frequency == 0` OR all tasks are complete:
 
-1. Stage all changes: `git add .`
+1. **Stage with PR-safe scope**. Never `git add .` blindly — that pulls workspace-only state (`.ai-knowledge/`, optionally `specs/`) into the feature branch.
+
+   Use a pathspec exclusion:
+   ```bash
+   # Always exclude .ai-knowledge/ — it's machine-generated workspace state.
+   # When commit_artifacts is false (default), also exclude specs/.
+   git add -- ':!.ai-knowledge' ':!.ai-knowledge/**' \
+     ${COMMIT_ARTIFACTS:+} ${COMMIT_ARTIFACTS:-':!specs' ':!specs/**'} .
+   ```
+   Or, more simply, stage explicit paths the iteration actually changed (preferred — narrowest blast radius):
+   ```bash
+   git add <file1> <file2> ...   # the files you modified this iteration
+   ```
+
+   `tasks.md` lives under `specs/<feature>/`. When `commit_artifacts: false`, its `[ ]` → `[x]` updates are intentionally **not** committed — the loop tracks them locally; the final PR is graded by the code, not the planning artifacts. When `commit_artifacts: true`, include `tasks.md` in the staged set.
+
 2. Commit: `git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)"`
-3. Log commit hash in `<ai-knowledge-dir>/progress.md`
+
+3. Log commit hash in `<ai-knowledge-dir>/progress.md`.
+
+4. **Sanity-check the staged set** before each checkpoint. Run:
+   ```bash
+   git diff --cached --name-only | grep -E '^(\.ai-knowledge|\.specify/extensions/pro)/' || true
+   ```
+   If anything matches, you have leaked workspace state into the commit — unstage with `git restore --staged <path>` and recommit. Note the leak in progress.md so the operator can audit.
 
 If git is not available, skip with a warning.
+
+### Why PR-safe scope matters
+
+The most common operator pain in real projects is force-pushing a feature branch to remove SpecKit artifacts before opening a PR. The default behavior of `git add .` plus an unsuspecting `git push` lands `.ai-knowledge/AGENT.md`, `progress.md`, sprint contracts, and evaluations into reviewer scope. Exclude them at staging time — not after the fact.
 
 ## AGENT.md Self-Update
 
