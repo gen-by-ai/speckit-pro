@@ -409,6 +409,40 @@ Estimated token savings per sprint: `spec.md (4k) + plan.md (3k) + progress.md (
 
 ---
 
+## Local knowledge index (`repo-ai`)
+
+**SpecKit Pro does not install or run this automatically.** It is an optional Node CLI that builds a **local** embedding index over repo markdown (skills, rules, `.specify`, etc.) so agents can run **`repo-ai search`** for semantic retrieval. Nothing is sent to a remote API.
+
+### Kickoff (first time)
+
+From the repository root:
+
+```bash
+cd repo-ai && npm install
+npm run build-index    # creates repo-ai/embeddings.jsonl + repo-ai/vectordb/index.json (first run downloads the model)
+npm run search -- "your question"
+```
+
+Or install the binary once and use it from any checkout:
+
+```bash
+npm install -g ./repo-ai
+repo-ai build
+repo-ai search "your question"
+```
+
+Generated **`repo-ai/embeddings.jsonl`** and **`repo-ai/vectordb/`** are gitignored by default; rebuild when docs change.
+
+### Docs for agents
+
+Cursor agents load **`.agents/skills/repo-ai-cli/SKILL.md`** when attached — same commands and **`REPO_AI_ROOT`** / **`--root`** behavior.
+
+### Used by Pro commands?
+
+**`/speckit.pro.reconcile`** may call **`repo-ai search`** as optional navigation hints if an index already exists; it does **not** run **`npm install`** or **`build`** for you.
+
+---
+
 ## Supported Agent CLIs
 
 SpecKit Pro auto-detects your installed agent CLI. Supported:
@@ -427,6 +461,7 @@ SpecKit Pro auto-detects your installed agent CLI. Supported:
 ```
 speckit-pro/
 ├── extension.yml                  # Extension manifest (SpecKit schema v1.0)
+├── repo-ai/                       # Optional local semantic index CLI (see “Local knowledge index” above)
 ├── commands/
 │   ├── pro.go.md                  # → /speckit.pro.go  — pipeline runner with overlap-aware pre-flight + branch convention check
 │   ├── pro.pickup.md              # → /speckit.pro.pickup  — entry point for stuck-but-planned features
