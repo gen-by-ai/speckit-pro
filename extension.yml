@@ -3,8 +3,8 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.8.0"
-  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts, context resets, AGENT.md self-update, live browser testing, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, and pickup-existing-feature workflow"
+  version: "1.9.0"
+  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts, post-implement drift reconciliation, context resets, AGENT.md self-update, live browser testing, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, and pickup-existing-feature workflow"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
   license: "MIT"
@@ -38,6 +38,10 @@ provides:
       file: commands/pro.evaluate.md
       description: "Strict QA evaluation of a completed sprint against the sprint contract — generator/evaluator split. Fires automatically after /speckit.implement"
 
+    - name: speckit.pro.reconcile
+      file: commands/pro.reconcile.md
+      description: "Post-implement spec drift review — writes pro-drift.md comparing spec/plan/tasks to code; run before evaluate for living-spec discipline"
+
     # ── Loop worker (invoked by orchestrator script) ───────────────────────────
     - name: speckit.pro.loop
       file: commands/pro.loop.md
@@ -69,6 +73,8 @@ provides:
 # ── Hooks on native SpecKit commands ──────────────────────────────────────────
 # Pro augments the native pipeline at lifecycle boundaries.
 # Native commands keep improving upstream; Pro adds intelligence on top.
+# For multiple hooks per phase (e.g. reconcile → evaluate after implement), merge
+# Pro into the project's `.specify/extensions.yml` — see this repo's template.
 hooks:
   after_tasks:
     command: speckit.pro.contract

@@ -151,5 +151,6 @@ After all phases complete successfully:
 ╚═══════════════════════════════════════════════════════════╝
 
 Next: /pro.status   to see detailed progress
+      /pro.reconcile after implement to record spec drift (pro-drift.md)
       /pro.evaluate to run a final QA evaluation
 ```
