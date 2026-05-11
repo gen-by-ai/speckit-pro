@@ -131,6 +131,13 @@ hooks:
     description: Auto-commit after implementation
     condition: null
   - extension: pro
+    command: speckit.pro.reconcile
+    enabled: true
+    optional: true
+    prompt: Run Pro drift reconciliation — compare spec/plan to code and write pro-drift.md?
+    description: Spec-vs-code drift triage before evaluator — complements static Markdown specs without silent auto-mutation
+    condition: null
+  - extension: pro
     command: speckit.pro.evaluate
     enabled: true
     optional: true

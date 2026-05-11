@@ -28,6 +28,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | `/speckit.implement` runs one pass | Self-healing loop with circuit breaker and retry |
 | No quality gate between tasks and implement | Sprint contracts auto-generated via `after_tasks` hook |
 | No independent QA — agent grades its own work | Separate evaluator agent via `after_implement` hook |
+| Static specs drift from code unnoticed | Optional **`/speckit.pro.reconcile`** writes **`pro-drift.md`** before evaluate |
 | Evaluator reads code statically | Evaluator uses **agent-browser** to click through the live running app |
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
@@ -96,7 +97,7 @@ SpecKit Pro will:
 3. Run `/speckit.plan` (gate: review plan)
 4. Run `/speckit.tasks` → `after_tasks` hook auto-generates sprint contract
 5. Run `/speckit.analyze` (auto)
-6. Run the implement loop → `after_implement` hook auto-runs evaluator
+6. Run the implement loop → `after_implement` hooks: optional **`speckit.pro.reconcile`** (writes **`pro-drift.md`**) then **`speckit.pro.evaluate`**
 
 ### Option B: Native Commands + Pro Hooks
 
@@ -107,6 +108,7 @@ Run native SpecKit commands as normal — Pro hooks fire automatically:
                         # → speckit.pro.contract fires automatically
 
 /speckit.implement      # implements the feature
+                        # → speckit.pro.reconcile (optional; drift vs spec/plan)
                         # → speckit.pro.evaluate fires automatically
 ```
 
@@ -138,7 +140,8 @@ If you've already done specify → plan → tasks:
 | Command | Fires automatically | Description |
 |---|---|---|
 | `/speckit.pro.contract` | after `/speckit.tasks` | Generate sprint contract — concrete acceptance criteria before coding |
-| `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, then drives the live app with **agent-browser** to test every CRITICAL criterion |
+| `/speckit.pro.reconcile` | after `/speckit.implement` (before evaluate) | Spec drift review — writes **`pro-drift.md`** so specs stay honest vs code |
+| `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, reads **`pro-drift.md`** if present, then drives the live app with **agent-browser** to test every CRITICAL criterion |
 | `/speckit.pro.checkpoint` | manual | Commit + session snapshot + progress log entry |
 
 ### Loop & Observability
@@ -243,8 +246,16 @@ export SPECKIT_PRO_AGENT_CLI="claude"
          └──────────────┬───────────────────────┘
                         ▼
          ┌──────────────────────────────────────┐
+         │  DRIFT: speckit.pro.reconcile        │
+         │  Compare spec/plan/tasks to code     │
+         │  Output: <FEATURE_DIR>/pro-drift.md  │
+         │  (optional hook — skip if abort)     │
+         └──────────────┬───────────────────────┘
+                        ▼
+         ┌──────────────────────────────────────┐
          │  EVALUATOR: speckit.pro.evaluate     │
          │  Fresh agent — no generator context  │
+         │  0. Read pro-drift.md if present     │
          │  1. Calibrate vs past sprint scores  │
          │  2. Start app via init.sh            │
          │  3. agent-browser: click every       │
@@ -420,6 +431,7 @@ speckit-pro/
 │   ├── pro.go.md                  # → /speckit.pro.go  — pipeline runner with overlap-aware pre-flight + branch convention check
 │   ├── pro.pickup.md              # → /speckit.pro.pickup  — entry point for stuck-but-planned features
 │   ├── pro.contract.md            # → /speckit.pro.contract  — sprint contracts (after_tasks hook)
+│   ├── pro.reconcile.md           # → /speckit.pro.reconcile  — spec drift vs code (after_implement hook, before evaluate)
 │   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator with agent-browser (after_implement hook)
 │   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update + PR-safe checkpoints
 │   ├── pro.status.md              # → /speckit.pro.status  — single-feature dashboard + workspace overview mode

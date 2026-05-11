@@ -38,6 +38,10 @@ Before scoring anything, read all files in `<ai-knowledge-dir>/evaluations/` (so
 
 Use this to set your scoring bar. If Sprint 1 scored 72 and Sprint 2 scored 91 with no obvious quality jump, your evaluator is drifting generous — correct for it.
 
+### Step 1b — Read drift reconciliation (if present)
+
+If **`<FEATURE_DIR>/pro-drift.md`** exists (from `/speckit.pro.reconcile`), read the **DRIFT** rows before scoring. Known document-vs-code mismatch **without** an updated spec or contract should normally **cap** the verdict below PASS unless the drift is explicitly acceptable (document why in the evaluation). Treat reconcile output as context, not a substitute for contract criteria.
+
 ### Step 2 — Load the Sprint Contract
 
 Read `<ai-knowledge-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
