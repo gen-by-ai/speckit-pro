@@ -30,6 +30,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | No independent QA — agent grades its own work | Separate evaluator agent via `after_implement` hook |
 | Static specs drift from code unnoticed | Optional **`/speckit.pro.reconcile`** writes **`pro-drift.md`** before evaluate |
 | No repo-level memory of domain or architecture | **`/speckit.pro.knowledge-sync`** primes new specs from **`.repo-knowledge/`** (`before_specify`) and proposes updates after evaluator PASS (`after_implement`) |
+| Specs go to implementation thin — data model, invariants, failure modes, side effects unspecified | **`/speckit.pro.deepen`** audits the draft spec against a depth checklist, investigates gaps from local + capability-matched external sources, writes cited patches + a focused human-input file (≤10 questions) before clarify runs |
 | Evaluator reads code statically | Evaluator uses **agent-browser** to click through the live running app |
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
@@ -47,7 +48,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.10.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.11.0.zip
 ```
 
 ### From source (local dev)
@@ -62,7 +63,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.10.0)
+# ✓ SpecKit Pro (v1.11.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -95,6 +96,7 @@ Run the complete SDD cycle from description to implementation:
 SpecKit Pro will:
 0. Run `/speckit.pro.knowledge-sync --mode prime` (skipped unless `.repo-knowledge/` exists and `knowledge.enabled: true`) — surfaces relevant domain/architecture/invariants/ADRs before the spec is written
 1. Run `/speckit.specify` (gate: review spec)
+1c. Run `/speckit.pro.deepen` (skipped unless `deepen.enabled: true`) — audits the spec against a depth checklist, investigates gaps, writes cited patches + human questions; pauses for the operator to answer
 2. Run `/speckit.clarify` (auto)
 3. Run `/speckit.plan` (gate: review plan)
 4. Run `/speckit.tasks` → `after_tasks` hook auto-generates sprint contract
@@ -142,6 +144,7 @@ If you've already done specify → plan → tasks:
 
 | Command | Fires automatically | Description |
 |---|---|---|
+| `/speckit.pro.deepen` | after `/speckit.specify` (before clarify) | Adversarial spec auditor: investigates gaps from `.repo-knowledge/`, code, sibling specs, git history, and any capability-matched external sources (issue tracker, docs). Writes **`spec-patches.md`** (cited proposals) + **`spec-questions.md`** (≤10 questions, multiple-choice). `--apply` merges as a diff. Disabled by default. |
 | `/speckit.pro.contract` | after `/speckit.tasks` | Generate sprint contract — concrete acceptance criteria before coding |
 | `/speckit.pro.reconcile` | after `/speckit.implement` (before evaluate) | Spec drift review — writes **`pro-drift.md`** so specs stay honest vs code |
 | `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, reads **`pro-drift.md`** if present, then drives the live app with **agent-browser** to test every CRITICAL criterion |
@@ -528,6 +531,7 @@ speckit-pro/
 │   ├── pro.reconcile.md           # → /speckit.pro.reconcile  — spec drift vs code (after_implement hook, before evaluate)
 │   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator with agent-browser (after_implement hook)
 │   ├── pro.knowledge-sync.md      # → /speckit.pro.knowledge-sync  — repo-level knowledge base prime/sync (before_specify + after_implement hooks)
+│   ├── pro.deepen.md              # → /speckit.pro.deepen  — adversarial spec auditor with capability-based source discovery (after_specify hook)
 │   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update + PR-safe checkpoints
 │   ├── pro.status.md              # → /speckit.pro.status  — single-feature dashboard + workspace overview mode
 │   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
@@ -558,6 +562,8 @@ speckit-pro/
 ├── handoff.md                     # Per-sprint context reset artifact (transient)
 ├── pro-drift.md                   # Spec-vs-code drift findings (from /pro.reconcile)
 ├── pro-knowledge.md               # Knowledge-base sync proposals (from /pro.knowledge-sync)
+├── spec-patches.md                # Cited spec proposals (from /pro.deepen)
+├── spec-questions.md              # Human-input file for unresolved gaps (from /pro.deepen)
 └── session.md                     # Pipeline phase state (transient)
 
 # Repo-level knowledge base — versioned, curated by the team
@@ -605,7 +611,9 @@ speckit-pro/
 
 12. **Pick up before you plan again** — Before starting a new feature, run `/speckit.pro.status` (workspace mode) to see what's already partially planned. `/pro.go`'s pre-flight scan catches ticket-ID and title overlap automatically, but a quick visual scan is faster. The most common stall pattern is "spec exists, never ran" — `/pro.pickup <feature>` is the fix.
 
-13. **Seed `.repo-knowledge/` before you turn on `knowledge.enabled`** — a knowledge base full of auto-generated guesses is worse than none. Hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md` first; then flip the switch and let `/pro.knowledge-sync` propose updates against curated ground truth. Treat `pro-knowledge.md` like a PR review queue — most proposals are right, but the breaking-tier ones earn their name.
+13. **Use `/pro.deepen` on any non-trivial feature** — the native spec template is shallow by design (user stories + a handful of FRs). Real features need a data model, invariants, failure modes, side effects, and a domain glossary the implement loop can lean on. `/pro.deepen` audits the draft against a depth checklist, investigates each gap from whatever sources are available (`.repo-knowledge/`, code, sibling specs, git history, and any capability-matched external integrations), and writes you ≤10 sharp multiple-choice questions for the rest. Front-loading 10 minutes here saves an hour of the implement loop missing helpers, validation, and error paths nobody specified.
+
+14. **Seed `.repo-knowledge/` before you turn on `knowledge.enabled`** — a knowledge base full of auto-generated guesses is worse than none. Hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md` first; then flip the switch and let `/pro.knowledge-sync` propose updates against curated ground truth. Treat `pro-knowledge.md` like a PR review queue — most proposals are right, but the breaking-tier ones earn their name.
 
 14. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
 

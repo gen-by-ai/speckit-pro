@@ -91,6 +91,13 @@ hooks:
     description: Auto-commit after constitution update
     condition: null
   after_specify:
+  - extension: pro
+    command: speckit.pro.deepen
+    enabled: true
+    optional: true
+    prompt: Run adversarial spec deepener — investigate gaps, surface questions before clarify?
+    description: Audits the draft spec against a depth checklist, investigates gaps from local + capability-matched external sources, writes cited patches and a focused human-input file. Disabled by default — opt in via deepen.enabled in pro-config.yml.
+    condition: null
   - extension: git
     command: speckit.git.commit
     enabled: true

@@ -2,6 +2,45 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.11.0] — 2026-05-14
+
+Focus: **spec depth at generation time**. The earlier releases added sophistication to the *execution* side (loop, evaluator, contracts, drift reconciliation, knowledge sync). But thin specs produce thin tasks, and thin tasks produce an implement loop that quietly drops helpers, validation, error paths, audit logging, and small code parts nobody wrote down. v1.11 attacks the upstream cause: the spec template asks for user stories + a handful of FRs and nothing else, so the agent fills exactly that and stops. The new `/speckit.pro.deepen` interrogates the draft spec against a depth checklist *before* it reaches clarify, investigates each gap autonomously from any source it can reach, and asks the operator only what no source can answer.
+
+### Added
+- **`/speckit.pro.deepen`** (`commands/pro.deepen.md`) — adversarial spec auditor with **capability-based source discovery** (no organization or vendor names hardcoded anywhere — the command describes the *kind* of source it needs and matches available tools at run time). Three modes:
+  - **Investigate** (default) — read `spec.md` against a depth checklist with eleven required sections (data model, invariants, failure modes, side effects, authorization, idempotency, audit, integration boundaries, domain glossary, performance, out-of-scope). Classify each as COMPLETE / PARTIAL / MISSING, generate specific questions for each gap.
+  - **`--apply`** — read the now-answered `spec-questions.md` plus the cited `spec-patches.md`, merge into `spec.md` as a single staged git diff (never auto-commit). Blocks if any question is unanswered or any medium-confidence patch lacks APPROVED/REJECTED annotation.
+  - **`--quick`** — local sources only, skip external capability lookups.
+- **Two-tier source model** with the **cite-or-escalate** principle:
+  - **Tier A (always)**: `.repo-knowledge/`, codebase (via `repo-ai`+grep), sibling `specs/*/`, last 90 days of git history on related paths.
+  - **Tier B (capability-discovered, opt-in)**: any tool whose name matches issue-tracker / docs / discussion / external-code-search patterns. The capability table is the *only* place tool names are referenced; the rest of the command operates on capability handles, so the same command works for any team's stack without modification.
+  - **Refuses to invent.** Every proposed patch must cite ≥1 source (`code:file:line`, `issue:<id>`, `docs:<title>`, …). No source → it's a question for the human, never invented prose.
+- **Per-feature output files** (mirrors `pro-drift.md` and `pro-knowledge.md` patterns):
+  - `<FEATURE_DIR>/spec-patches.md` — cited proposals with high/medium confidence tagging
+  - `<FEATURE_DIR>/spec-questions.md` — ≤10 sharp human-input questions, multiple-choice where possible
+- **Hard time budget** — 300s total, 30s per source, configurable per-run. Investigation is not a research project; it is a sharp tool.
+- **Phase 1c — Deepen** (`pro.go.md`) — new optional phase between `/speckit.specify` and `/speckit.clarify`. Pauses the pipeline for human input (the whole point is to challenge the spec before downstream phases consume it). Skipped silently when `deepen.enabled: false` (default). Run-plan banner updated.
+- **Hook wiring** (`extension.yml`, `.specify/extensions.yml`) — new `after_specify` entry firing `speckit.pro.deepen` before the auto-commit and before `/speckit.clarify`.
+- **`deepen:` config block** (`pro-config.template.yml`, `extension.yml` defaults) — toggles for `enabled` (off by default), `run_after_specify`, `time_budget_seconds`, `per_source_budget_seconds`, `max_questions`, and a `sources.*` map with per-category opt-in (`true`/`false` for local sources, `auto`/`off` for capability-discovered external sources).
+- **README**:
+  - New comparison-table row (thin specs → adversarial deepen).
+  - New Hook Commands table entry.
+  - Phase list under Option A updated to surface Phase 1c.
+  - Extension Structure tree registers `pro.deepen.md`, `spec-patches.md`, `spec-questions.md`.
+  - New Best Practices bullet (#13: use `/pro.deepen` on any non-trivial feature).
+- **`extension.yml`** — version bumped to **1.11.0**; `speckit.pro.deepen` registered; description updated.
+
+### Why
+Three observations from running SpecKit Pro in production drove this release:
+
+1. **Generated specs are shallow because the template is shallow.** Native SpecKit's `spec-template.md` requires user stories, ~5 example FRs, and two example "Key Entities" — and that's it. No required sections for data model, invariants, failure modes, side effects, glossary, authorization, or audit. The agent fills what's asked and stops. No amount of downstream orchestration (loop sophistication, evaluators, contracts, drift reconcile) compensates for the spec never having captured the thinking in the first place.
+2. **"Small code parts being missed" is a thin-spec symptom, not a loop bug.** The implement loop ticks off the work units it can see in `tasks.md`. If the spec never mentioned the audit log, the validation helper, the idempotency key, the retry envelope, or the error class — `tasks.md` won't have them, and the loop won't implement them. Fixing this at the loop level is whack-a-mole; fixing it at the spec level is the lever.
+3. **AI is bad at substituting for the deep thinking phase, but good at scaffolding it.** `/speckit.clarify` asks "are there any clarifying questions?" and gets a couple of generic ones. Asking the agent "investigate each section against this depth checklist, look up what you can from sources, and ask the human only what no source can answer" produces a structured interrogation that genuinely deepens the spec — and respects the human's time by escalating only undecidable questions, with multiple-choice options when possible.
+
+The pattern intentionally **opts in** (`deepen.enabled: false` by default). It adds 5–10 minutes of operator time per feature upfront in exchange for a spec that survives contact with implementation. Prototyping workflows can keep it off; serious features should turn it on.
+
+The pattern also lands more value as `.repo-knowledge/` matures (v1.10's contribution) — the deepener's first stop is the curated knowledge base, so the more bounded contexts and invariants are documented there, the fewer questions the operator gets asked.
+
 ## [1.10.0] — 2026-05-14
 
 Focus: **repo-level knowledge**. v1.9 closed the spec-vs-code drift gap; v1.10 closes the layer above — *what the business means*, *which bounded contexts own what*, *which invariants must never break* — the context that doesn't live in any single feature spec and that the loop otherwise has to rediscover every iteration.

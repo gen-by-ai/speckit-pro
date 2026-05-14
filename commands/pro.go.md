@@ -103,6 +103,8 @@ Display the run plan and ask "Proceed? (yes/no)":
 ├──────────────────────────────────────────────────────────────┤
 │  0. /pro.knowledge-sync --mode prime  (skipped if disabled)  │
 │  1. /speckit.specify    gate: [YES|NO]                       │
+│  1c. /pro.deepen        (skipped if disabled; pauses for     │
+│                          human Qs, then /pro.deepen --apply) │
 │  2. /speckit.clarify    skip: [YES|NO]                       │
 │  3. /speckit.plan       gate: [YES|NO]                       │
 │  4. /speckit.tasks      → pro.contract (auto via hook)       │
@@ -170,6 +172,41 @@ Gate: `gates.after_specify`
 5. **Skip silently** if: no convention detected, current branch already non-default, or running on `main`/`trunk` (which means the user has their own branching strategy already).
 
 No gate.
+
+### Phase 1c — Deepen (optional)
+
+Adversarially audit the draft spec before clarify runs. The deepener investigates gaps autonomously from local sources (`.repo-knowledge/`, code, sibling specs, git history) and from any capability-matched external sources (issue tracker, docs system), then asks the operator only the questions no source can answer.
+
+Skip entirely if any of the following is true:
+- `deepen.enabled: false` in `pro-config.yml` (default off — opt-in), or
+- `deepen.run_after_specify: false`.
+
+Otherwise:
+
+```
+EXECUTE_COMMAND: /pro.deepen
+```
+
+The command writes two files to `<FEATURE_DIR>/`:
+- `spec-patches.md` — cited proposals (auto-resolved gaps)
+- `spec-questions.md` — focused human-input file (≤10 questions, multiple-choice when possible)
+
+**Pause for human input.** Print:
+```
+⏸ Deepen wrote <N> proposals and <M> questions to:
+    specs/<feature>/spec-patches.md
+    specs/<feature>/spec-questions.md
+
+Fill in the answers, then resume with one of:
+  /pro.deepen --apply   (merge patches + answers into spec.md)
+  abort                 (skip deepen entirely; spec stays as-is)
+```
+
+Wait for the operator. When they return:
+- If they ran `/pro.deepen --apply`, continue to Phase 2 (clarify).
+- If they typed `abort`, log to `session.md` and continue to Phase 2.
+
+Rationale: the whole point of deepen is to challenge the spec before any downstream phase consumes it. Auto-continuing would defeat the purpose.
 
 ### Phase 2 — Clarify
 Skip if `quality.run_clarify: false`.
