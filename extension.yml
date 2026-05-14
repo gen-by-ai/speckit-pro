@@ -3,8 +3,8 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.9.0"
-  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts, post-implement drift reconciliation, context resets, AGENT.md self-update, live browser testing, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, and pickup-existing-feature workflow"
+  version: "1.11.0"
+  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery, context resets, AGENT.md self-update, live browser testing, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, and pickup-existing-feature workflow"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
   license: "MIT"
@@ -42,6 +42,14 @@ provides:
       file: commands/pro.reconcile.md
       description: "Post-implement spec drift review — writes pro-drift.md comparing spec/plan/tasks to code; run before evaluate for living-spec discipline"
 
+    - name: speckit.pro.knowledge-sync
+      file: commands/pro.knowledge-sync.md
+      description: "Repo-level knowledge-base sync — primes new specs with `.repo-knowledge/` context (before_specify) and reconciles claims vs code after evaluator PASS (after_implement). Writes pro-knowledge.md proposals; never silently mutates the knowledge base"
+
+    - name: speckit.pro.deepen
+      file: commands/pro.deepen.md
+      description: "Adversarial spec deepener — audits the draft spec against a depth checklist (data model, invariants, failure modes, side effects, glossary, …), investigates gaps autonomously from local sources and any capability-matched external sources (issue tracker, docs system), and asks the operator only what no source can answer. Writes spec-patches.md (cited proposals) + spec-questions.md (human input). Use --apply to merge as a diff."
+
     # ── Loop worker (invoked by orchestrator script) ───────────────────────────
     - name: speckit.pro.loop
       file: commands/pro.loop.md
@@ -76,6 +84,19 @@ provides:
 # For multiple hooks per phase (e.g. reconcile → evaluate after implement), merge
 # Pro into the project's `.specify/extensions.yml` — see this repo's template.
 hooks:
+  before_specify:
+    command: speckit.pro.knowledge-sync
+    args: "--mode prime"
+    optional: true
+    prompt: "Prime the agent with repo-level context from .repo-knowledge/ before writing the spec?"
+    description: "Retrieval-only knowledge prime — grounds the agent in existing domain/architecture so it doesn't reinvent terms or duplicate bounded contexts. No-op if .repo-knowledge/ does not exist."
+
+  after_specify:
+    command: speckit.pro.deepen
+    optional: true
+    prompt: "Run adversarial spec deepener (investigate gaps, surface questions before clarify)?"
+    description: "Audits the draft spec against a depth checklist, investigates gaps from local + capability-matched external sources, writes cited patches + a focused human-input file. Disabled by default — opt in via deepen.enabled."
+
   after_tasks:
     command: speckit.pro.contract
     optional: true
@@ -87,6 +108,10 @@ hooks:
     optional: true
     prompt: "Run Pro evaluator to grade the implementation against the sprint contract?"
     description: "Strict QA review — separate evaluator agent eliminates self-praise bias (Anthropic harness pattern)"
+
+  # Note: a second after_implement entry — speckit.pro.knowledge-sync — chains AFTER evaluate.
+  # It runs only when the evaluator returned PASS, so docs are never updated against unverified code.
+  # The full chain is declared in .specify/extensions.yml: git.commit → pro.reconcile → pro.evaluate → pro.knowledge-sync
 
 tags:
   - "autonomous"
@@ -127,5 +152,28 @@ defaults:
   commit:
     commit_artifacts: false   # Default: keep specs/ and .ai-knowledge/ out of feature commits
     auto_gitignore: true      # Append .ai-knowledge/ (and conditionally specs/) to .gitignore
+  knowledge:
+    enabled: false              # Off by default — turn on after curating .repo-knowledge/
+    prime_before_specify: true  # Pull retrieval bundle from .repo-knowledge/ before /speckit.specify
+    prime_before_plan: false    # Re-prime if plan widens scope; default off for cost
+    sync_after_evaluate: true   # Reconcile .repo-knowledge/ against the diff after evaluator PASS
+    auto_apply_tier: "additive" # none | additive — never "destructive". Clarifying/breaking always proposal-only.
+    sync_writes_to: "pro-knowledge.md"  # Per-feature review file, same pattern as pro-drift.md
+    root_dir: ".repo-knowledge" # Versioned, committed. Distinct from .ai-knowledge/ (workspace-only).
+  deepen:
+    enabled: false               # Opt-in: front-loads rigor at the cost of operator time upfront
+    run_after_specify: true      # Fire deepen between specify and clarify
+    time_budget_seconds: 300     # Hard wall-clock cap per run
+    per_source_budget_seconds: 30
+    max_questions: 10            # Cap questions written to spec-questions.md
+    sources:
+      repo_knowledge: true       # .repo-knowledge/ (if present)
+      code: true                 # local codebase via repo-ai + grep
+      sibling_specs: true        # other specs/*/ directories
+      git_history: true          # last 90 days of related commits/PRs
+      issue_tracker: "auto"      # auto-use any capability-matched tool; "off" to disable
+      documentation: "auto"      # auto-use any capability-matched tool; "off" to disable
+      discussion: "off"          # chat/threads — low signal, off by default
+      external_code_search: "auto"
   model: "claude-sonnet-4.6"
   agent_cli: "copilot"
