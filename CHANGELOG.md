@@ -2,6 +2,34 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.10.0] — 2026-05-14
+
+Focus: **repo-level knowledge**. v1.9 closed the spec-vs-code drift gap; v1.10 closes the layer above — *what the business means*, *which bounded contexts own what*, *which invariants must never break* — the context that doesn't live in any single feature spec and that the loop otherwise has to rediscover every iteration.
+
+### Added
+- **`/speckit.pro.knowledge-sync`** (`commands/pro.knowledge-sync.md`) — two-mode command for maintaining a versioned, curated `.repo-knowledge/` knowledge base:
+  - **`--mode prime`** (read) — fires from `before_specify` (and at the top of `/pro.go` / `/pro.pickup`). Retrieves the top-k chunks from `.repo-knowledge/` relevant to the new feature via `repo-ai search`, surfaces them as a `<pro-knowledge-prime>` block so the agent doesn't reinvent terms, violate invariants, or duplicate a bounded context in the spec it's about to write. Falls back to INDEX.md grep when `repo-ai` is unavailable.
+  - **`--mode sync`** (write) — fires from `after_implement`, **last in the chain after `pro.evaluate`**. Self-skips unless the evaluator returned `PASS` (so docs are never updated against unverified code). Diffs the sprint vs `.repo-knowledge/` claims and writes `<FEATURE_DIR>/pro-knowledge.md` with three-tier proposals: **additive** (new endpoints, glossary terms — eligible for auto-apply per policy), **clarifying** (existing descriptions now imprecise — always review-only), and **breaking** (invariant or ADR conflicts — always review-only, blocks merge). Never auto-edits `decisions/`, `invariants.md`, or `domain/*`.
+  - **Cost short-circuits** — exits early when only tests/fixtures changed, when `.repo-knowledge/` doesn't exist, or when no `.repo-knowledge/` file references the changed paths. Most sprints don't move the knowledge needle.
+  - **ADR scaffolding** — when a `breaking` proposal exists, drafts `<FEATURE_DIR>/pro-knowledge-adr-draft.md` so the cost of recording a decision is lower than the cost of ignoring it.
+- **Hook wiring** (`extension.yml`, `.specify/extensions.yml`):
+  - `before_specify` — new entry firing `speckit.pro.knowledge-sync --mode prime`.
+  - `after_implement` — chain extended: `git.commit → pro.reconcile → pro.evaluate → pro.knowledge-sync`.
+- **Phase 0 — Knowledge Prime** (`pro.go.md`) — new optional first step in `/pro.go`'s pipeline. Skipped silently when `knowledge.enabled: false` (default) or `.repo-knowledge/` is missing. Updated run-plan banner and completion footer to surface the new phase and post-loop sync step.
+- **`knowledge:` config block** (`pro-config.template.yml`, `extension.yml` defaults) — seven toggles: `enabled` (master switch, default off), `prime_before_specify`, `prime_before_plan` (off — re-prime only when plan widens scope), `sync_after_evaluate`, `auto_apply_tier` (`none` | `additive` — never destructive), `sync_writes_to`, `root_dir` (default `.repo-knowledge`).
+- **`.repo-knowledge/` directory convention** — versioned in git, distinct from `.ai-knowledge/` (workspace-only). Layout: `INDEX.md` (decision tree), `architecture.md`, `domain/` (glossary + bounded contexts + invariants), `decisions/` (ADRs), `runbooks/`.
+- **README**:
+  - New "Repo-level knowledge base" section documenting the layout, hook positions, and design rules.
+  - New comparison-table row, new Hook Commands entry, new Best Practices bullet (#13: seed before enabling).
+  - Loop diagram updated with the KNOWLEDGE box between EVALUATOR and the status-tag parse.
+  - Extension Structure tree updated to register `pro.knowledge-sync.md`, `pro-knowledge.md`, and the `.repo-knowledge/` tree.
+- **`extension.yml`** — version bumped to **1.10.0**; `speckit.pro.knowledge-sync` registered.
+
+### Why
+v1.8 fixed the *entry-point* problem (features stuck at `/tasks` never starting the loop). v1.9 fixed the *spec drift* problem (specs silently lying about code). v1.10 fixes the layer above both: the loop has no repo-wide memory of business meaning. Every new feature rediscovers domain terms, sometimes inventing new ones, sometimes violating invariants that exist in code but not in any document the agent loads. `.repo-knowledge/` is the human-curated ground truth; `pro.knowledge-sync` keeps it from rotting by proposing — never silently committing — updates after each verified sprint.
+
+The pattern intentionally **opts in**. Disabled by default: an empty knowledge base produces empty primes (harmless but pointless), and an auto-generated one full of unreviewed slop is worse than nothing — the loop will trust its own guesses. The expected adoption path is hand-write `INDEX.md` + one `domain/<context>.md`, run for one feature, review the first `pro-knowledge.md`, then enable.
+
 ## [1.9.0] — 2026-05-11
 
 Focus: **spec drift** — bridging the gap between static Markdown specs and platform-style “living” specs without silent auto-mutation.

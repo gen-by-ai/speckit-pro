@@ -18,6 +18,14 @@ hooks:
     prompt: Execute speckit.git.feature?
     description: Create feature branch before specification
     condition: null
+  - extension: pro
+    command: speckit.pro.knowledge-sync
+    args: --mode prime
+    enabled: true
+    optional: true
+    prompt: Prime the agent with .repo-knowledge/ context before writing the spec?
+    description: Retrieval-only knowledge prime — grounds the agent in existing domain/architecture. No-op if .repo-knowledge/ does not exist.
+    condition: null
   before_clarify:
   - extension: git
     command: speckit.git.commit
@@ -144,6 +152,13 @@ hooks:
     prompt: Run Pro evaluator to grade the implementation against the sprint contract?
     description: Strict QA review — separate evaluator agent eliminates self-praise
       bias (Anthropic harness pattern)
+    condition: null
+  - extension: pro
+    command: speckit.pro.knowledge-sync
+    enabled: true
+    optional: true
+    prompt: Reconcile .repo-knowledge/ against this sprint's code changes? (runs only on evaluator PASS)
+    description: Diffs the diff against repo-level knowledge claims; writes pro-knowledge.md proposals. Self-skips if evaluator did not return PASS, if .repo-knowledge/ does not exist, or if only tests/fixtures changed.
     condition: null
   after_checklist:
   - extension: git

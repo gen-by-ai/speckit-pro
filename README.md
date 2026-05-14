@@ -29,6 +29,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | No quality gate between tasks and implement | Sprint contracts auto-generated via `after_tasks` hook |
 | No independent QA — agent grades its own work | Separate evaluator agent via `after_implement` hook |
 | Static specs drift from code unnoticed | Optional **`/speckit.pro.reconcile`** writes **`pro-drift.md`** before evaluate |
+| No repo-level memory of domain or architecture | **`/speckit.pro.knowledge-sync`** primes new specs from **`.repo-knowledge/`** (`before_specify`) and proposes updates after evaluator PASS (`after_implement`) |
 | Evaluator reads code statically | Evaluator uses **agent-browser** to click through the live running app |
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
@@ -46,7 +47,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.6.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.10.0.zip
 ```
 
 ### From source (local dev)
@@ -61,7 +62,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.6.0)
+# ✓ SpecKit Pro (v1.10.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -92,12 +93,13 @@ Run the complete SDD cycle from description to implementation:
 ```
 
 SpecKit Pro will:
+0. Run `/speckit.pro.knowledge-sync --mode prime` (skipped unless `.repo-knowledge/` exists and `knowledge.enabled: true`) — surfaces relevant domain/architecture/invariants/ADRs before the spec is written
 1. Run `/speckit.specify` (gate: review spec)
 2. Run `/speckit.clarify` (auto)
 3. Run `/speckit.plan` (gate: review plan)
 4. Run `/speckit.tasks` → `after_tasks` hook auto-generates sprint contract
 5. Run `/speckit.analyze` (auto)
-6. Run the implement loop → `after_implement` hooks: optional **`speckit.pro.reconcile`** (writes **`pro-drift.md`**) then **`speckit.pro.evaluate`**
+6. Run the implement loop → `after_implement` hooks: optional **`speckit.pro.reconcile`** (writes **`pro-drift.md`**) → **`speckit.pro.evaluate`** → optional **`speckit.pro.knowledge-sync`** (writes **`pro-knowledge.md`**, only on evaluator PASS)
 
 ### Option B: Native Commands + Pro Hooks
 
@@ -110,6 +112,7 @@ Run native SpecKit commands as normal — Pro hooks fire automatically:
 /speckit.implement      # implements the feature
                         # → speckit.pro.reconcile (optional; drift vs spec/plan)
                         # → speckit.pro.evaluate fires automatically
+                        # → speckit.pro.knowledge-sync (optional; only on evaluator PASS)
 ```
 
 ### Option C: Implementation Loop Only
@@ -142,6 +145,7 @@ If you've already done specify → plan → tasks:
 | `/speckit.pro.contract` | after `/speckit.tasks` | Generate sprint contract — concrete acceptance criteria before coding |
 | `/speckit.pro.reconcile` | after `/speckit.implement` (before evaluate) | Spec drift review — writes **`pro-drift.md`** so specs stay honest vs code |
 | `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, reads **`pro-drift.md`** if present, then drives the live app with **agent-browser** to test every CRITICAL criterion |
+| `/speckit.pro.knowledge-sync` | `before_specify` (prime) + after `/speckit.pro.evaluate` (sync, on PASS only) | Repo-level knowledge base: primes new specs from **`.repo-knowledge/`** before they're written; after evaluator PASS, diffs the sprint vs knowledge claims and writes **`pro-knowledge.md`** proposals. Never silently mutates the knowledge base. |
 | `/speckit.pro.checkpoint` | manual | Commit + session snapshot + progress log entry |
 
 ### Loop & Observability
@@ -266,6 +270,20 @@ export SPECKIT_PRO_AGENT_CLI="claude"
          │  PASS → continue                     │
          │  NEEDS_REVISION → generator retries  │
          │  FAIL → human review required        │
+         └──────────────┬───────────────────────┘
+                        ▼
+         ┌──────────────────────────────────────┐
+         │  KNOWLEDGE: speckit.pro.knowledge-sync │
+         │  Runs ONLY on evaluator PASS         │
+         │  Skips if .repo-knowledge/ absent    │
+         │  Skips if only tests/fixtures changed│
+         │  1. Diff vs .repo-knowledge/ claims  │
+         │  2. Classify: additive/clarifying/   │
+         │     breaking                         │
+         │  3. Write pro-knowledge.md           │
+         │     (review file, mirrors drift)    │
+         │  4. Auto-apply additive only (opt)   │
+         │  5. Scaffold ADR draft on breaking   │
          └──────────────┬───────────────────────┘
                         ▼
          ┌──────────────────────────────────────┐
@@ -441,6 +459,47 @@ Cursor agents load **`.agents/skills/repo-ai-cli/SKILL.md`** when attached — s
 
 **`/speckit.pro.reconcile`** may call **`repo-ai search`** as optional navigation hints if an index already exists; it does **not** run **`npm install`** or **`build`** for you.
 
+**`/speckit.pro.knowledge-sync`** uses **`repo-ai search`** in `prime` mode to retrieve the top-k chunks from **`.repo-knowledge/`** before a new spec is written. With no index, it falls back to grep over **`INDEX.md`**.
+
+---
+
+## Repo-level knowledge base (`.repo-knowledge/`)
+
+Specs describe **one feature**. `AGENT.md` describes **how to run the project**. Neither captures the layer above: *what does the business mean by "policy", which bounded contexts own writes to `customer`, what invariants must never break*. Without that layer, every new feature rediscovers the domain from code — slowly, and often wrong.
+
+**`.repo-knowledge/`** is that layer. Unlike `.ai-knowledge/` (workspace-only, gitignored), this directory is **versioned in git** — it's the team's living documentation, curated by humans, indexed by `repo-ai`, and consulted by the loop at both ends of the pipeline.
+
+### Suggested layout
+
+```
+.repo-knowledge/
+├── INDEX.md                    # decision tree: "if touching X, read Y, then Z"
+├── architecture.md             # systems map + entry points per area
+├── domain/
+│   ├── glossary.md             # business terms, not code terms
+│   ├── <bounded-context>.md    # one per business capability (billing, auth, …)
+│   └── invariants.md           # rules that must never break
+├── decisions/
+│   └── ADR-NNNN-*.md           # accepted decisions, append-only history
+└── runbooks/
+    └── <flow>.md               # end-to-end traces (request → DB → side effects)
+```
+
+### How SpecKit Pro uses it
+
+| Phase | Hook | What happens |
+|---|---|---|
+| **Before specify** | `before_specify` → `/pro.knowledge-sync --mode prime` | Retrieves top-k chunks relevant to the feature description and surfaces them to the agent before it writes `spec.md`. Prevents reinventing terms, violating invariants, or duplicating a bounded context. |
+| **After evaluate PASS** | `after_implement` (last step) → `/pro.knowledge-sync` (default `sync`) | Diffs the sprint's code against claims in `.repo-knowledge/`. Writes `<FEATURE_DIR>/pro-knowledge.md` with **additive** / **clarifying** / **breaking** proposals. Auto-applies additive only (configurable); never auto-edits `decisions/`, `invariants.md`, or `domain/*`. |
+
+### Design rules
+
+1. **Disabled by default.** Turn `knowledge.enabled: true` on in `pro-config.yml` only after seeding at least `INDEX.md` and one domain file. An auto-generated knowledge base that nobody reviews is worse than no knowledge base.
+2. **Sync only runs on evaluator PASS.** Updating docs against not-yet-verified code corrupts the knowledge base. Drift on failure is normal; drift on PASS is the only kind worth recording.
+3. **Sync short-circuits cheaply.** If the diff touches only tests/fixtures, or none of `.repo-knowledge/` references the changed paths, the command exits in ~1s without an agent call.
+4. **Proposals go to a review file first.** `pro-knowledge.md` mirrors the `pro-drift.md` pattern — operator decides what graduates into `.repo-knowledge/`.
+5. **INDEX.md is a decision tree, not a TOC.** Each entry should read **"if you are touching X, read Y, then Z"**. The loop traverses it like a router during `prime`.
+
 ---
 
 ## Supported Agent CLIs
@@ -468,6 +527,7 @@ speckit-pro/
 │   ├── pro.contract.md            # → /speckit.pro.contract  — sprint contracts (after_tasks hook)
 │   ├── pro.reconcile.md           # → /speckit.pro.reconcile  — spec drift vs code (after_implement hook, before evaluate)
 │   ├── pro.evaluate.md            # → /speckit.pro.evaluate  — QA evaluator with agent-browser (after_implement hook)
+│   ├── pro.knowledge-sync.md      # → /speckit.pro.knowledge-sync  — repo-level knowledge base prime/sync (before_specify + after_implement hooks)
 │   ├── pro.loop.md                # → /speckit.pro.loop  — single iteration worker with AGENT.md self-update + PR-safe checkpoints
 │   ├── pro.status.md              # → /speckit.pro.status  — single-feature dashboard + workspace overview mode
 │   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
@@ -496,7 +556,17 @@ speckit-pro/
 .specify/<feature>/
 ├── spec.md / plan.md / tasks.md   # Native SpecKit artifacts
 ├── handoff.md                     # Per-sprint context reset artifact (transient)
+├── pro-drift.md                   # Spec-vs-code drift findings (from /pro.reconcile)
+├── pro-knowledge.md               # Knowledge-base sync proposals (from /pro.knowledge-sync)
 └── session.md                     # Pipeline phase state (transient)
+
+# Repo-level knowledge base — versioned, curated by the team
+.repo-knowledge/
+├── INDEX.md                       # Decision-tree entry points
+├── architecture.md                # Systems map + entry points
+├── domain/                        # Bounded contexts, glossary, invariants
+├── decisions/                     # ADRs (append-only history)
+└── runbooks/                      # End-to-end flow traces
 
 # Persistent knowledge — survives extension updates
 .ai-knowledge/<feature>/
@@ -535,7 +605,9 @@ speckit-pro/
 
 12. **Pick up before you plan again** — Before starting a new feature, run `/speckit.pro.status` (workspace mode) to see what's already partially planned. `/pro.go`'s pre-flight scan catches ticket-ID and title overlap automatically, but a quick visual scan is faster. The most common stall pattern is "spec exists, never ran" — `/pro.pickup <feature>` is the fix.
 
-13. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
+13. **Seed `.repo-knowledge/` before you turn on `knowledge.enabled`** — a knowledge base full of auto-generated guesses is worse than none. Hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md` first; then flip the switch and let `/pro.knowledge-sync` propose updates against curated ground truth. Treat `pro-knowledge.md` like a PR review queue — most proposals are right, but the breaking-tier ones earn their name.
+
+14. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
 
 ---
 

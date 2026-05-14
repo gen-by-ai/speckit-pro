@@ -14,6 +14,25 @@ $ARGUMENTS
 
 The arguments are passed as the feature description to `/speckit.specify`. If empty, ask the user for a feature description before proceeding.
 
+## Phase 0 — Knowledge Prime (optional)
+
+Before *anything else*, ground the agent in repo-level context so the spec it's about to write doesn't reinvent terms, violate invariants, or duplicate work in an existing bounded context.
+
+Skip entirely if any of the following is true:
+- `<PROJECT_ROOT>/.repo-knowledge/` does not exist (the knowledge base hasn't been adopted yet), or
+- `knowledge.enabled: false` in `pro-config.yml` (default), or
+- `knowledge.prime_before_specify: false`.
+
+Otherwise:
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<$ARGUMENTS>"
+```
+
+The command emits a `<pro-knowledge-prime>` block to stdout — keep it in context for the remainder of `/pro.go`. It is **retrieval-only**: nothing is written, nothing is committed. If retrieval returns zero hits, surface the "unexplored territory" note before continuing — that's a signal to the human reviewer at the spec gate that this feature may need a new bounded context.
+
+This phase costs one extra agent call (~5–15s with a warm `repo-ai` index). It is disabled by default; turn it on after the team has hand-curated at least `INDEX.md` and one domain file under `.repo-knowledge/`. An empty knowledge base produces empty primes — no harm, but no value either.
+
 ## Pre-Flight: Existing-Feature Scan
 
 Before generating a new spec, check whether the same work is already in flight. The single biggest reason features stall is duplicate planning — a new spec is created when an old one already covers the work.
@@ -82,12 +101,15 @@ Display the run plan and ask "Proceed? (yes/no)":
 ┌──────────────────────────────────────────────────────────────┐
 │  SpecKit Pro — Pipeline Runner                               │
 ├──────────────────────────────────────────────────────────────┤
+│  0. /pro.knowledge-sync --mode prime  (skipped if disabled)  │
 │  1. /speckit.specify    gate: [YES|NO]                       │
 │  2. /speckit.clarify    skip: [YES|NO]                       │
 │  3. /speckit.plan       gate: [YES|NO]                       │
 │  4. /speckit.tasks      → pro.contract (auto via hook)       │
 │  5. /speckit.analyze    skip: [YES|NO]                       │
 │  6. implement loop      max: N iterations                    │
+│  7. after_implement     → reconcile → evaluate               │
+│                         → knowledge-sync (on PASS only)      │
 ├──────────────────────────────────────────────────────────────┤
 │  Model: <model>  │  Agent CLI: <agent_cli>                   │
 └──────────────────────────────────────────────────────────────┘
@@ -423,4 +445,5 @@ After all phases complete successfully:
 Next: /pro.status   to see detailed progress
       /pro.reconcile after implement to record spec drift (pro-drift.md)
       /pro.evaluate to run a final QA evaluation
+      /pro.knowledge-sync to refresh .repo-knowledge/ against the merged code
 ```

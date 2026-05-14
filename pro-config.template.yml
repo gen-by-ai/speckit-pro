@@ -117,6 +117,58 @@ context:
   #       for long autonomous runs — compaction is lossy; handoffs are precise.
   autocompact_pct_override: ~  # null = use Claude Code default (~83.5%)
 
+# ── Repo-level Knowledge Base ────────────────────────────────────────────────
+# A versioned Markdown knowledge base at <project root>/.repo-knowledge/ that
+# captures domain language, architecture, invariants, and decisions — the layer
+# above per-feature specs and per-feature AGENT.md.
+#
+# When enabled, /speckit.pro.knowledge-sync runs in two modes:
+#   • prime  — before /speckit.specify, retrieves top-k chunks relevant to the
+#              new feature so the agent doesn't reinvent terms or violate
+#              invariants in the spec it's about to write.
+#   • sync   — after /speckit.pro.evaluate returns PASS, diffs the sprint's
+#              code changes against .repo-knowledge/ claims and writes
+#              <FEATURE_DIR>/pro-knowledge.md with proposed updates. Never
+#              silently mutates the knowledge base; the operator approves
+#              before edits graduate.
+#
+# Disabled by default. Turn on only after .repo-knowledge/INDEX.md exists and
+# has been hand-curated for at least one bounded context. An auto-generated
+# knowledge base that nobody reviews is worse than no knowledge base.
+knowledge:
+  # Master switch. When false, both hooks are no-ops.
+  enabled: false
+
+  # Run pro.knowledge-sync --mode prime as the first step of /pro.go and /pro.pickup.
+  # Cost: ~5–15s extra per pipeline run with a warm repo-ai index. Skip if no .repo-knowledge/.
+  prime_before_specify: true
+
+  # Also re-prime before /speckit.plan (useful if the plan widens scope into
+  # bounded contexts the spec didn't anticipate). Default off — most teams
+  # don't need it and the cost adds up.
+  prime_before_plan: false
+
+  # Run pro.knowledge-sync --mode sync as the last step of after_implement,
+  # AFTER pro.evaluate. Self-skips unless the evaluator returned PASS, so
+  # docs are never updated against unverified code.
+  sync_after_evaluate: true
+
+  # What classes of edit may auto-merge into .repo-knowledge/ when sync runs.
+  #   • "none"     — every proposal is review-only; nothing is auto-edited.
+  #   • "additive" — only purely additive edits auto-apply (new endpoints in
+  #                  architecture.md, new glossary terms). Never destructive.
+  # Clarifying and breaking-tier edits are ALWAYS proposal-only regardless of
+  # this setting. Files under decisions/, invariants.md, and domain/* are
+  # never auto-edited under any policy.
+  auto_apply_tier: "additive"
+
+  # Where sync writes its review file. Same pattern as pro-drift.md.
+  sync_writes_to: "pro-knowledge.md"
+
+  # Directory name (relative to project root) for the knowledge base. This is
+  # VERSIONED in git — distinct from .ai-knowledge/ which is workspace-only.
+  root_dir: ".repo-knowledge"
+
 # ── Effort Level Settings ─────────────────────────────────────────────────────
 # Inspired by: https://claudefa.st/blog/guide/development/opus-4-7-best-practices
 #
