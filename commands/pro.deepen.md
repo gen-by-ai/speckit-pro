@@ -66,8 +66,26 @@ Read `spec.md` (and `plan.md` if it exists). Grade coverage of each section in t
 | **Domain glossary** | Business terms used in the spec, with their precise meaning **in this context** |
 | **Performance / scale** | Expected volume, latency requirements, growth assumptions |
 | **Out-of-scope** | What this feature explicitly does *not* do (essential to prevent scope creep) |
+| **Edge cases & failure states** | For every primary user flow, the input × state matrix is enumerated (see below). Each cell has an explicit expected behavior — not just "show an error" |
 
 For each `PARTIAL` or `MISSING` section, generate **specific questions** — not "describe the data model", but "Quote has `bound_at` field — is it set on quote creation or on customer acceptance?".
+
+#### Edge cases — the input × state matrix
+
+Specs that ship without this matrix are the upstream cause of MP-1435-class regressions: a guard is added, the happy path still works, an unseen state breaks production. For every primary user flow in the spec, the **Edge Cases & Failure States** section must enumerate (with explicit expected behavior per cell):
+
+| Axis | Required cells |
+|---|---|
+| **Inputs** | Empty/missing (every form field, every URL param, every required store slice). Invalid (wrong type, out-of-range, malformed). Boundary (zero, max, off-by-one). |
+| **Authorization** | Logged out. Session expired. Insufficient role. Cross-tenant access attempt. |
+| **Network** | Offline. Slow (>2s). Request fails (4xx). Request errors (5xx). Request times out. |
+| **Concurrency** | Stale data (record changed since fetch). Optimistic-update collision. Double-submit. |
+| **Re-entry** | Back button. Hard refresh mid-flow. Deep link bypassing prior step. Browser tab restored from suspend. |
+| **State hydration** | Required Redux/zustand slice undefined. Required server-state cache empty. Required cookie absent. |
+
+For each cell that applies to the flow, write a one-line **expected behavior** statement that an evaluator could verify by clicking the live app. "Show an error" is not acceptable; "Form renders with default values, BE call is skipped, no spinner persists" is acceptable.
+
+If a cell genuinely does not apply (e.g. an unauthenticated marketing page has no Authorization axis), write `N/A — <one-sentence reason>`. Skipping silently is not allowed.
 
 ### Phase 2 — Autonomous Resolution (cite-or-escalate)
 
@@ -144,8 +162,9 @@ For each gap **not** resolved (no source found, or sources conflicted), write a 
 1. Data model gaps (block schema)
 2. Invariants (block downstream correctness)
 3. Failure modes for P1 user stories
-4. Authorization
-5. Everything else
+4. Edge-case matrix cells where the expected behavior is undecidable from sources (typical: "what does the UI show when the Redux slice is undefined on first render?")
+5. Authorization
+6. Everything else
 
 Each question uses **multiple choice when possible** — the operator's time is the scarce resource:
 

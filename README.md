@@ -32,6 +32,11 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | No repo-level memory of domain or architecture | **`/speckit.pro.knowledge-sync`** primes new specs from **`.repo-knowledge/`** (`before_specify`) and proposes updates after evaluator PASS (`after_implement`) |
 | Specs go to implementation thin — data model, invariants, failure modes, side effects unspecified | **`/speckit.pro.deepen`** audits the draft spec against a depth checklist, investigates gaps from local + capability-matched external sources, writes cited patches + a focused human-input file (≤10 questions) before clarify runs |
 | Evaluator reads code statically | Evaluator uses **agent-browser** to click through the live running app |
+| Edge cases die silently — sprint passes on happy path only | **Edge Cases & Failure States** required in spec (six-axis matrix); contract has Browser Test column per row; every CRITICAL row needs a replayable agent-browser script |
+| Browser tests are ephemeral — evaluator clicks once, no replay | `<spec-dir>/browser-tests/<flow>/<NN>-<state>.sh` — durable, hermetic scripts. **Regression carry-forward**: every future sprint re-runs *all* prior scripts. A later sprint cannot silently re-break an earlier sprint's behavior |
+| New branch added without test coverage — happy path masks regression | **Branch-symmetry enforcement**: every new `if`/short-circuit/early-return in the diff must have a contract row asserting that branch's behavior — evaluator triggers `unrostered-branch` NEEDS_REVISION otherwise |
+| Stubs and no-ops slip through | **Stub & no-op auto-FAIL gate** — auto-greps for `TODO`, `throw new Error('not implemented')`, empty function bodies, empty JSX renders, silent `catch` blocks in non-test files; any match auto-fails the sprint, no scoring discretion |
+| Silent failures (blank UI, stuck spinner) scored same as loud ones | **`silent` failure-mode tag** on every contract row; silent rows are auto-promoted to CRITICAL regardless of typed severity (silent regressions are the worst class — no monitoring catches them) |
 | Context grows unbounded over many iterations | Per-sprint `handoff.md` resets context cleanly |
 | No project memory across context windows | `AGENT.md` — loop writes its own learnings each iteration |
 | No pre-flight sanity check | `init.sh` smoke-tests the app before each new work unit |
@@ -48,7 +53,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.11.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.12.0.zip
 ```
 
 ### From source (local dev)
@@ -63,7 +68,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.11.0)
+# ✓ SpecKit Pro (v1.12.0)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -74,10 +79,10 @@ To update to a newer release, remove the existing extension and re-add it:
 
 ```bash
 specify extension remove pro
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.4.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.12.0.zip
 ```
 
-Replace `v1.4.0` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
+Replace `v1.12.0` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
 
 > **Note:** Updating replaces the extension files in `.specify/extensions/pro/` but does **not** touch your feature spec directories or `.ai-knowledge/` — all your `AGENT.md`, `contracts/`, `evaluations/`, and `progress.md` are untouched.
 
@@ -549,8 +554,9 @@ speckit-pro/
 ├── templates/
 │   ├── session-template.md        # Session state template
 │   ├── progress-template.md       # Progress log template
-│   ├── contract-template.md       # Sprint contract template
-│   └── handoff-template.md        # Context reset handoff template
+│   ├── contract-template.md       # Sprint contract template (eight-column schema with State + Browser Test rows)
+│   ├── handoff-template.md        # Context reset handoff template
+│   └── browser-test-template.sh   # Canonical hermetic agent-browser test shape (one row per script)
 ├── pro-config.template.yml        # Configuration template
 ├── README.md
 ├── CHANGELOG.md
@@ -564,6 +570,9 @@ speckit-pro/
 ├── pro-knowledge.md               # Knowledge-base sync proposals (from /pro.knowledge-sync)
 ├── spec-patches.md                # Cited spec proposals (from /pro.deepen)
 ├── spec-questions.md              # Human-input file for unresolved gaps (from /pro.deepen)
+├── browser-tests/                 # Durable agent-browser test scripts — one per CRITICAL contract row
+│   ├── _template.sh               #   Reference copy of templates/browser-test-template.sh
+│   └── <flow>/<NN>-<state>.sh     #   Hermetic, single-assertion, time-boxed; run by evaluator every sprint (regression carry-forward)
 └── session.md                     # Pipeline phase state (transient)
 
 # Repo-level knowledge base — versioned, curated by the team

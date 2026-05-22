@@ -185,19 +185,60 @@ Front-load file paths — the model processes paths literally. Passing `apps/web
 
 ## Implementation
 
-For each task in the selected work unit:
+For each contract row in scope (the contract's Acceptance Criteria table is the canonical to-do list — `tasks.md` is the high-level grouping):
 
-1. Read the sprint contract criteria — implement against them
-2. Implement the code/changes described in the task
-3. Verify each acceptance criterion is met (check edge cases, not just happy path)
-4. Mark the task complete in `tasks.md` by changing `- [ ]` to `- [x]`
+1. **TDD-first** — write the Browser Test script (and the Verified By unit/integration test) **before** the implementation that satisfies them.
+2. Run the Browser Test script. It MUST fail. If it passes against the unmodified code, the contract row is not specific enough — sharpen the assertion or you are not actually testing anything.
+3. Implement the code/changes described in the task.
+4. Run the Browser Test script again. It MUST pass. If it does not, iterate on the implementation — never weaken the test to make it green.
+5. Run the Verified By unit/integration test. Same protocol: must fail before, pass after.
+6. Mark the task complete in `tasks.md` only when both green.
+
+**A task is NOT complete until every contract row it covers has a passing Browser Test script committed to `<spec-dir>/browser-tests/`.** Marking a task `[x]` without the script is a contract violation and produces a NEEDS_REVISION verdict from the evaluator.
+
+### Browser-test script requirements
+
+For each CRITICAL row in the sprint contract, write `<spec-dir>/browser-tests/<flow>/<NN>-<state>.sh`. Reference `templates/browser-test-template.sh` (copied into the spec dir as `_template.sh` by `/speckit.pro.contract`) for the canonical shape.
+
+Hard rules:
+- **Hermetic setup** — every script clears `localStorage`, `sessionStorage`, cookies before asserting. No script may depend on the order in which siblings ran.
+- **Asserts one row** — one script asserts exactly one contract row. Multi-assert scripts are forbidden; they hide which row regressed when the script fails.
+- **Time-boxed** — no `wait-for` longer than 10s; explicit timeouts only. A test that hangs is worse than one that fails.
+- **Exit codes** — `0` PASS, `1` FAIL (assertion failed), `2` ERROR (app/infra problem). Anything other than 0 is a sprint blocker.
+- **Re-runnable** — a re-run on a clean build MUST produce the same verdict. Flaky scripts are immediate NEEDS_REVISION.
+- **Negative assertions matter** — every script must assert what should NOT be visible (stuck spinner, blank container, raw error text) in addition to what should. The MP-1435 lesson: a happy-path-only assertion missed the empty-store regression entirely.
+
+### Branching control-flow rule
+
+If your diff introduces a guard, short-circuit, or any new branch into an existing function (e.g. `if (X) return;`, `if (!ok) throw;`, an early-exit `return null` inside a `useEffect`), the contract must have at least one row asserting behavior when the guarded condition is true AND one row asserting the original path is unaffected. **Add the row to the contract before implementing the branch.** This is the structural fix for the MP-1435 class of bug: every new branch must have a contract row.
+
+If the contract does not yet have those rows, stop implementation and emit:
+
+```
+<pro-uncertainty>Adding a new branch in <file>:<line>. Contract row needed for guarded path
+and unaffected original path. Pausing for contract update.</pro-uncertainty>
+```
+
+Then update the contract (append rows under the current sprint), commit the contract update, and resume.
 
 **Quality checks during implementation**:
-- Does the implementation satisfy each contract criterion?
+- Does the implementation satisfy each contract row's Browser Test? (Run them — don't infer from reading code.)
 - Does it follow the tech stack from `plan.md` (or `handoff.md`)?
 - Are there security issues? (SQL injection, XSS, hardcoded secrets, broken auth)
 - Does the feature actually wire up end-to-end, not just exist as a stub?
 - Is the code structured so the **next iteration can safely build on it**? (no deep coupling, no magic constants, no undocumented side effects)
+- For every new branch you introduced: is there a Browser Test row asserting its behavior?
+
+### Stub-and-no-op self-check
+
+Before marking ANY task complete, scan your own diff for:
+- `TODO`, `FIXME`, `XXX`, `HACK` markers
+- `throw new Error('not implemented')`, `raise NotImplementedError`
+- Function bodies that are just `return;`, `return null;`, `return {};`, `pass`
+- Components that render `<></>`, `null`, or a comment-only JSX block
+- Empty `catch` blocks that swallow errors silently
+
+If any match exists in a file the contract claims to have implemented, the task is NOT done. Either complete it or mark the task with `<!-- BLOCKED: <reason> -->` and emit `BLOCKED`. Do not signal `CONTINUE` with stubs in the diff — the evaluator will auto-FAIL the sprint.
 
 **Underspecified requirements:**
 If a task or criterion is ambiguous enough that two reasonable implementations would produce meaningfully different results, do **not** silently guess. Pick the most conservative interpretation, implement it, and emit `<pro-uncertainty>` in your progress entry:
