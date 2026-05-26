@@ -17,7 +17,7 @@ The core idea: native SpecKit gives you great individual commands — `specify`,
 
 It hooks into native SpecKit rather than replacing it, so upstream improvements to `speckit.plan` or `speckit.implement` benefit you automatically.
 
-> **New in v1.13** — optional **local Ollama sidecar** that takes over the token-heavy prep + first-pass review surfaces (repo maps, context packs, task packets, risk registers, test strategies, implementation/test-gap/security reviews) so Claude becomes a premium worker, not the whole factory. See **[Local Ollama sidecar](#local-ollama-sidecar-token-offload-optional)** below. v1.13.1 adds **`/speckit.pro.local-metrics`** — a read-only dashboard of per-task latency, failure rate, and per-review-type **precision/recall** measured against the evaluator's verdicts.
+> **New in v1.13** — optional **local Ollama sidecar** that takes over the token-heavy prep + first-pass review surfaces (repo maps, context packs, task packets, risk registers, test strategies, implementation/test-gap/security reviews) so Claude becomes a premium worker, not the whole factory. Plus **`/speckit.pro.local-metrics`** — a read-only dashboard of per-task latency, failure rate, and per-review-type **precision/recall** measured against the evaluator's verdicts. See **[Local Ollama sidecar](#local-ollama-sidecar-token-offload-optional)** below.
 
 ## Why SpecKit Pro?
 
@@ -101,7 +101,7 @@ The two human gates are **spec** and **plan**. Everything else is auto-continue 
    ```
    Then in `pro-config.yml`: `local_models.enabled: true`. See [Local Ollama sidecar](#local-ollama-sidecar-token-offload-optional).
 4. **(Optional) `.repo-knowledge/`** — hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md`. Then `knowledge.enabled: true`. See [Repo-level knowledge base](#repo-level-knowledge-base-repo-knowledge).
-5. **Verify** — `specify extension list` should show ✓ SpecKit Pro (v1.13.1).
+5. **Verify** — `specify extension list` should show ✓ SpecKit Pro (v1.13).
 
 ### When to use which command — cheat sheet
 
@@ -134,7 +134,7 @@ The two human gates are **spec** and **plan**. Everything else is auto-continue 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.1.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.zip
 ```
 
 ### From source (local dev)
@@ -149,7 +149,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.13.1)
+# ✓ SpecKit Pro (v1.13)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -160,10 +160,10 @@ To update to a newer release, remove the existing extension and re-add it:
 
 ```bash
 specify extension remove pro
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.1.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.zip
 ```
 
-Replace `v1.13.1` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
+Replace `v1.13` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
 
 > **Note:** Updating replaces the extension files in `.specify/extensions/pro/` but does **not** touch your feature spec directories or `.ai-knowledge/` — all your `AGENT.md`, `contracts/`, `evaluations/`, and `progress.md` are untouched.
 
