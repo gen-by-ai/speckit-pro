@@ -306,6 +306,87 @@ pickup:
   # and project rule files for a different naming convention; prompt to rename.
   branch_rename_prompt: true
 
+# ── Local Models (Ollama sidecar) ─────────────────────────────────────────────
+# Optional offload of token-heavy prep + first-pass review to a local Ollama
+# server. Inspired by .dev-work/dev.md: Claude becomes a premium worker, not
+# the whole factory. Local Markdown drafts are NEVER trusted as final — they
+# get a provenance banner, and the stronger evaluator (Claude / pro.evaluate)
+# verifies before anything ships.
+#
+# Disabled by default. Turn on once Ollama is installed and a code-capable
+# 7B model is pulled (e.g. `ollama pull qwen2.5-coder:7b`). If enabled but
+# Ollama isn't reachable, the commands print a one-line note and exit 0 —
+# they never abort the pipeline.
+local_models:
+  # Master switch. When false, /pro.local-prep, /pro.local-review, and the
+  # local branch of /pro.materialize are no-ops. The hooks below also self-skip.
+  enabled: false
+
+  # Ollama HTTP endpoint. For Pi-class hardware, point this at a workstation:
+  #   base_url: "http://workstation.local:11434"
+  # Env override: OLLAMA_BASE_URL
+  base_url: "http://localhost:11434"
+
+  # ── Model routing ──────────────────────────────────────────────────────────
+  # Per-task routing. Use a strong code model for code-shaped tasks
+  # (task packets, implementation review) and a smaller fast model for
+  # summaries / Markdown cleanup. Each must be pulled with `ollama pull <name>`.
+  default_model:  "qwen2.5-coder:7b"  # repo-map, context-pack, risk register, etc.
+  fast_model:     "llama3.2:3b"       # summaries, Markdown normalize (small + cheap)
+  code_model:     "qwen2.5-coder:7b"  # task packets, first-pass implementation review
+  review_model:   "qwen2.5-coder:7b"  # test-gap review
+  security_model: "qwen2.5-coder:7b"  # first-pass security screen
+
+  # Per-request timeout. Local 7B models on consumer hardware can take
+  # 30–120s for a 1K-token Markdown artifact; 180s is a safe default.
+  timeout_seconds: 180
+
+  # Ollama context window in tokens. 8K fits the prep artifacts comfortably;
+  # bump to 16384 only if your model supports it AND you have the VRAM.
+  num_ctx: 8192
+
+  # Lower = more deterministic. 0.2 is a good default for Markdown artifacts.
+  # The prep prompts say "do not invent facts"; low temp helps enforce that.
+  temperature: 0.2
+
+  # ── Task switches ──────────────────────────────────────────────────────────
+  # Fine-grained on/off per artifact type. Leaving everything on is fine; set
+  # to false if you have your own version of an artifact (e.g. you hand-author
+  # risk-register.md).
+  tasks:
+    repo_map:       true
+    context_pack:   true
+    task_packets:   true
+    test_strategy:  true
+    risk_register:  true
+    open_questions: true
+    local_review:   true
+
+  # ── Auto-run hooks into pro.go ─────────────────────────────────────────────
+  # When true, pro.go automatically inserts /pro.local-prep at Phase 4b and
+  # /pro.local-review at Phase 6b. When false, the commands are manual-only.
+  auto_run:
+    after_tasks:       true   # /pro.local-prep + /pro.materialize after /speckit.tasks
+    before_implement:  false  # rare — re-prep right before the loop (usually redundant)
+    before_evaluate:   true   # /pro.local-review after the loop, before /pro.evaluate
+
+  # ── Telemetry (layer 1) ────────────────────────────────────────────────────
+  # ollama-md.py appends one JSONL line per call (success and failure) and
+  # /pro.evaluate appends one verdict line per local-review finding. The
+  # /pro.local-metrics command reads this file and prints a dashboard of
+  # performance (p50/p95 latency, failure rate per task) and review quality
+  # (precision, recall per review type).
+  #
+  # Cost: a few hundred bytes per call. Disable only if you cannot tolerate
+  # any disk writes from the sidecar.
+  telemetry: true
+
+  # JSONL location. Relative paths resolve against the project root.
+  # Lives under .ai-knowledge/ (gitignored) by default — metrics are workspace
+  # state, not artifacts. Override with $SPECKIT_PRO_METRICS_FILE at runtime
+  # if you want to write into a shared/team location.
+  metrics_file: ".ai-knowledge/local-metrics.jsonl"
+
 # ── Notification Settings ─────────────────────────────────────────────────────
 # (Future: webhook/notification integration)
 notify:

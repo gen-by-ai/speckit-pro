@@ -154,6 +154,68 @@ done
 
 Any DANGLING file → at minimum NEEDS_REVISION with reason `dangling-file:<path>`. New files that nothing imports are stubs in disguise.
 
+### Step 4c — Local-Review Verdict Capture (telemetry, layer 1)
+
+If `<FEATURE_DIR>/local-reviews/` exists (written by `/pro.local-review`), the local Ollama models gave you a head start: candidate findings with full evidence packs. Your job here is to record **how good those drafts were** so we can measure the local stack's quality over time — precision (kept ÷ produced) and recall (agreed ÷ (agreed + missed-by-local)) per review type.
+
+This step is telemetry, not gatekeeping. The verdict you assign here does not change PASS/NEEDS_REVISION/FAIL by itself — it just writes events to the metrics file. The hard gates above already decided severity.
+
+**Skip entirely if** `<FEATURE_DIR>/local-reviews/` does not exist (local sidecar was off or unreachable when the sprint ran). No metrics events, no warning.
+
+Otherwise:
+
+1. **Resolve the metrics file path**:
+   ```bash
+   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   METRICS_FILE="${SPECKIT_PRO_METRICS_FILE:-$PROJECT_ROOT/.ai-knowledge/local-metrics.jsonl}"
+   mkdir -p "$(dirname "$METRICS_FILE")"
+   ```
+
+2. **For each `local-reviews/*.md` file**, parse the findings (markers `### F1 — …`, `### G1 — …`, `### S1 — …` per the templates) and decide one verdict per finding:
+
+   | Verdict     | Meaning                                                                                          |
+   |-------------|--------------------------------------------------------------------------------------------------|
+   | `agreed`    | I read the cited file:line, the evidence holds, and the finding is a real issue.                 |
+   | `kept`      | Real but lower severity than the local model said (or vice-versa) — see `severity_delta`.        |
+   | `dropped`   | False positive: cited code does not have the claimed problem, OR is unreachable, OR has guard.   |
+   | `unverifiable` | Cited file/line no longer exists, or the evidence is too thin to verify in budget.            |
+
+3. **Also record findings the local model MISSED** that you caught fresh in Step 4. For each, append a `missed` event with a synthetic `finding_ref` like `NEW-impl-1`. Recall depends on this — without these events, recall is meaningless.
+
+4. **Append one JSONL line per finding** to `$METRICS_FILE`:
+
+   ```json
+   {"type":"verdict","ts":"2026-05-26T12:34:56Z","feature":"<FEATURE>","sprint":<N>,
+    "review_type":"implementation-review|test-gap-review|security-review",
+    "finding_ref":"F1|G1|S1|NEW-impl-1",
+    "verdict":"agreed|kept|dropped|unverifiable|missed",
+    "severity_delta":-1|0|+1,
+    "notes":"one-line evaluator note"}
+   ```
+
+   The bash one-liner that does this cleanly:
+   ```bash
+   python3 - <<'PY' >> "$METRICS_FILE"
+   import json, datetime as dt
+   rec = {
+     "type":"verdict",
+     "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00","Z"),
+     "feature": "<FEATURE>",
+     "sprint": <N>,
+     "review_type": "<TYPE>",
+     "finding_ref": "<REF>",
+     "verdict": "<VERDICT>",
+     "severity_delta": <DELTA>,
+     "notes": "<NOTE>",
+   }
+   print(json.dumps(rec, separators=(",",":")))
+   PY
+   ```
+
+5. **Calibration hint**: if you find yourself dropping ≥ 50 % of one review type's findings, that's a signal worth recording in your evaluation prose (`<ai-knowledge-dir>/evaluations/sprint-<N>.md`) — the local model or its prompt template may need tuning. Run `/pro.local-metrics --feature <feature>` afterwards to see the trend.
+
+**Why this step exists**: from `.dev-work/learning.md` (MDASH lesson 4) — "prove the model didn't just memorize the answer". The evaluator is the only authority that can grade the local stack's output. Anything else is self-reporting and drifts.
+
 ### Step 5 — Write Evaluation & Verdict
 
 Write evaluation to `<ai-knowledge-dir>/evaluations/sprint-<N>.md`.

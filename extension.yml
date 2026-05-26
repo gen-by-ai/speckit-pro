@@ -3,8 +3,8 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.12.0"
-  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts with edge-case matrix + browser-test rows, replayable agent-browser test scripts with regression carry-forward, stub/no-op auto-fail gate, branch-symmetry enforcement, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery + edge-case depth checklist, context resets, AGENT.md self-update, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, pickup-existing-feature workflow"
+  version: "1.13.1"
+  description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts with edge-case matrix + browser-test rows, replayable agent-browser test scripts with regression carry-forward, stub/no-op auto-fail gate, branch-symmetry enforcement, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery + edge-case depth checklist, context resets, AGENT.md self-update, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, pickup-existing-feature workflow, local Ollama sidecar (prep/materialize/first-pass review) with evidence-pack discipline so Claude becomes a premium worker not the whole factory"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
   license: "MIT"
@@ -72,6 +72,23 @@ provides:
       file: commands/pro.compress.md
       description: "Compress spec artifacts into a lean handoff.md for context-reset between iterations"
 
+    # ── Local Ollama sidecar (token offload) ──────────────────────────────────
+    - name: speckit.pro.local-prep
+      file: commands/pro.local-prep.md
+      description: "Offload prep-phase Markdown (repo-map, context-pack, risk register, test strategy, open questions) to local Ollama models. Self-skips if local_models.enabled is false or Ollama is unreachable; never aborts the pipeline."
+
+    - name: speckit.pro.local-review
+      file: commands/pro.local-review.md
+      description: "First-pass implementation / test-gap / security review by local Ollama models. Writes evidence-pack Markdown that the stronger evaluator verifies — local model never has the final say."
+
+    - name: speckit.pro.materialize
+      file: commands/pro.materialize.md
+      description: "Materialize tasks.md into per-task packets under <SPEC_DIR>/task-packets/TASK-NNN-<slug>.md. Local-model refined when Ollama is available; deterministic skeletons otherwise."
+
+    - name: speckit.pro.local-metrics
+      file: commands/pro.local-metrics.md
+      description: "Read-only dashboard of local-model performance (latency, failure rate) and first-pass review quality (precision, recall) aggregated from .ai-knowledge/local-metrics.jsonl. Pure Python; never calls Claude or Ollama."
+
   config:
     - name: "pro-config.yml"
       template: "pro-config.template.yml"
@@ -103,15 +120,25 @@ hooks:
     prompt: "Generate sprint contract for the next implementation phase?"
     description: "Bridges task descriptions to concrete acceptance criteria before the implement loop starts"
 
+  # Note: a second after_tasks entry — speckit.pro.local-prep + speckit.pro.materialize — chains
+  # AFTER pro.contract. Both self-skip unless local_models.enabled is true AND Ollama is reachable.
+  # The full chain (when local_models is on) becomes:
+  #   /speckit.tasks → /pro.contract → /pro.local-prep → /pro.materialize
+  # The order matters: pro.contract uses spec/plan/tasks (Claude); pro.local-prep generates the
+  # repo-map / context-pack / risk register / test strategy / open questions that downstream
+  # iterations and pro.local-review consume; pro.materialize lays out per-task packets.
+
   after_implement:
     command: speckit.pro.evaluate
     optional: true
     prompt: "Run Pro evaluator to grade the implementation against the sprint contract?"
     description: "Strict QA review — separate evaluator agent eliminates self-praise bias (Anthropic harness pattern)"
 
-  # Note: a second after_implement entry — speckit.pro.knowledge-sync — chains AFTER evaluate.
-  # It runs only when the evaluator returned PASS, so docs are never updated against unverified code.
-  # The full chain is declared in .specify/extensions.yml: git.commit → pro.reconcile → pro.evaluate → pro.knowledge-sync
+  # Note: additional after_implement entries chain in this order (declared in .specify/extensions.yml):
+  #   git.commit → pro.reconcile → pro.local-review → pro.evaluate → pro.knowledge-sync
+  # - pro.local-review writes evidence-pack drafts for pro.evaluate to verify (self-skips if local off).
+  # - pro.knowledge-sync runs only when pro.evaluate returns PASS, so docs are never updated against
+  #   unverified code.
 
 tags:
   - "autonomous"
@@ -177,3 +204,28 @@ defaults:
       external_code_search: "auto"
   model: "claude-sonnet-4.6"
   agent_cli: "copilot"
+  local_models:
+    enabled: false                       # Opt-in: install Ollama + pull a 7B coder model first
+    base_url: "http://localhost:11434"
+    default_model: "qwen2.5-coder:7b"
+    fast_model: "llama3.2:3b"
+    code_model: "qwen2.5-coder:7b"
+    review_model: "qwen2.5-coder:7b"
+    security_model: "qwen2.5-coder:7b"
+    timeout_seconds: 180
+    num_ctx: 8192
+    temperature: 0.2
+    tasks:
+      repo_map: true
+      context_pack: true
+      task_packets: true
+      test_strategy: true
+      risk_register: true
+      open_questions: true
+      local_review: true
+    auto_run:
+      after_tasks: true
+      before_implement: false
+      before_evaluate: true
+    telemetry: true                                    # write one JSONL line per ollama-md.py call
+    metrics_file: ".ai-knowledge/local-metrics.jsonl"  # relative paths resolve against project root

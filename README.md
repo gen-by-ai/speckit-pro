@@ -17,6 +17,8 @@ The core idea: native SpecKit gives you great individual commands — `specify`,
 
 It hooks into native SpecKit rather than replacing it, so upstream improvements to `speckit.plan` or `speckit.implement` benefit you automatically.
 
+> **New in v1.13** — optional **local Ollama sidecar** that takes over the token-heavy prep + first-pass review surfaces (repo maps, context packs, task packets, risk registers, test strategies, implementation/test-gap/security reviews) so Claude becomes a premium worker, not the whole factory. See **[Local Ollama sidecar](#local-ollama-sidecar-token-offload-optional)** below. v1.13.1 adds **`/speckit.pro.local-metrics`** — a read-only dashboard of per-task latency, failure rate, and per-review-type **precision/recall** measured against the evaluator's verdicts.
+
 ## Why SpecKit Pro?
 
 Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them together for **hands-free, resumable, self-healing autonomous runs**:
@@ -45,6 +47,85 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 | No hard limits on irreversible actions | **Scope of Autonomy** — hard rules on what loop may never do alone |
 | No session state — can't resume | Full session persistence → `/speckit.pro.resume` |
 | No visibility into autonomous progress | Rich status dashboard → `/speckit.pro.status` |
+| Heavy prep + review work runs on Claude tokens | Optional **local Ollama sidecar** writes `repo-map.md`, `context-pack.md`, `task-packets/`, `risk-register.md`, `test-strategy.md`, and a first-pass `local-reviews/` of implementation / test-gap / security. Provenance banner enforces "drafts, not truth"; Claude verifies. Self-skips if Ollama is unreachable. |
+| No way to measure if local-model offload is worth keeping | **`/speckit.pro.local-metrics`** — per-task p50/p95 latency + failure rate, per-review-type **precision** (kept ÷ produced) and **recall** (agreed ÷ (agreed + missed)) measured against the evaluator's verdicts, top false-positive signatures, Ollama availability over time |
+
+---
+
+## Quick Guide
+
+The day-to-day commands and flow most users actually need. Read this section first; the rest of the README is reference.
+
+### Most-used commands, in order of frequency
+
+| When | Command | What it does |
+|---|---|---|
+| Starting a new feature | `/speckit.pro.go <description>` | Full pipeline: spec → clarify → plan → tasks → implement → reconcile → evaluate. Pre-flight scans `specs/` for ticket-ID and title overlap so you don't double-plan an in-flight feature. |
+| Half-planned feature is stuck | `/speckit.pro.pickup <feature>` | Detects which phase stalled (most common: spec exists, never ran the loop) and runs only the missing prerequisites before starting. |
+| "What's in flight?" | `/speckit.pro.status` (no args) | Workspace overview: every feature under `specs/` + its detected phase + the suggested pickup command. |
+| "How's feature X going?" | `/speckit.pro.status <feature>` | Single-feature dashboard: progress bar, recent activity, health signals. |
+| Loop crashed, continue | `/speckit.pro.resume` | Picks up from the last session checkpoint with the right model/agent CLI flags. |
+| Spec feels thin | `/speckit.pro.deepen` → answer questions → `/speckit.pro.deepen --apply` | Adversarial spec auditor with capability-based source discovery. Investigates gaps, writes ≤10 sharp human questions, merges your answers + cited patches into `spec.md`. Use on any non-trivial feature. |
+| Is the local model worth keeping? | `/speckit.pro.local-metrics` | Per-task latency + per-review precision/recall. Read-only; never calls Claude or Ollama. |
+
+### Recommended flow for a new feature
+
+```
+1. /speckit.pro.go "Build payment retry with exponential backoff"
+       ├─ Phase 1   /speckit.specify         (review the spec when it pauses)
+       ├─ Phase 1c  /pro.deepen              (optional, recommended for non-trivial work)
+       ├─ Phase 2   /speckit.clarify         (auto)
+       ├─ Phase 3   /speckit.plan            (review the plan when it pauses)
+       ├─ Phase 4   /speckit.tasks → /pro.contract
+       ├─ Phase 4b  /pro.local-prep + /pro.materialize   (optional, Ollama sidecar)
+       ├─ Phase 5   /speckit.analyze         (auto)
+       ├─ Phase 6   implement loop           (sprint-by-sprint)
+       ├─ Phase 6b  /pro.local-review        (optional, Ollama sidecar)
+       └─ Phase 7   /pro.reconcile → /pro.evaluate → /pro.knowledge-sync (on PASS)
+
+2. Review the PR. If something's off, run /speckit.pro.status <feature> to see what.
+3. If the loop stopped early: /speckit.pro.resume
+4. (Periodic) /speckit.pro.local-metrics — is the local stack pulling its weight?
+```
+
+The two human gates are **spec** and **plan**. Everything else is auto-continue by default. One bad architectural decision cascades — review the plan carefully.
+
+### Day-zero setup checklist
+
+1. **Install the extension** — `specify extension add pro --from <release-url>` (see [Installation](#installation)).
+2. **Copy the config template** — `cp .specify/extensions/pro/pro-config.template.yml .specify/extensions/pro/pro-config.yml` and skim it.
+3. **(Optional) Local Ollama sidecar** — if you want to cut Claude tokens:
+   ```bash
+   brew install ollama && ollama serve &
+   ollama pull qwen2.5-coder:7b
+   ```
+   Then in `pro-config.yml`: `local_models.enabled: true`. See [Local Ollama sidecar](#local-ollama-sidecar-token-offload-optional).
+4. **(Optional) `.repo-knowledge/`** — hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md`. Then `knowledge.enabled: true`. See [Repo-level knowledge base](#repo-level-knowledge-base-repo-knowledge).
+5. **Verify** — `specify extension list` should show ✓ SpecKit Pro (v1.13.1).
+
+### When to use which command — cheat sheet
+
+- "I have an idea, build the feature" → **`/speckit.pro.go`**
+- "I have a spec/plan/tasks but never built it" → **`/speckit.pro.pickup`**
+- "Show me everything in flight" → **`/speckit.pro.status`** (no args)
+- "How's feature X going?" → **`/speckit.pro.status <feature>`**
+- "Loop crashed, continue" → **`/speckit.pro.resume`**
+- "Spec is too thin, find the gaps" → **`/speckit.pro.deepen`** then **`/speckit.pro.deepen --apply`**
+- "Generate per-task packets so the loop loads less context per iteration" → **`/speckit.pro.materialize`**
+- "Do a first-pass code review before the evaluator" → **`/speckit.pro.local-review`** (requires Ollama)
+- "Generate prep artifacts (repo-map, context-pack, ...)" → **`/speckit.pro.local-prep`** (requires Ollama)
+- "Is the local model worth keeping?" → **`/speckit.pro.local-metrics`**
+- "Compare the spec/plan to what we actually built" → **`/speckit.pro.reconcile`**
+- "Run a strict QA on the current sprint" → **`/speckit.pro.evaluate`** (fires automatically after implement)
+- "Update `.repo-knowledge/` from the merged code" → **`/speckit.pro.knowledge-sync`** (runs automatically on evaluator PASS)
+- "Compress context for the next sprint" → **`/speckit.pro.compress`**
+- "Commit + snapshot session right now" → **`/speckit.pro.checkpoint`**
+
+### Three patterns that catch most real-world cases
+
+1. **"New feature, full pipeline"** → `/speckit.pro.go <description>`. Default.
+2. **"Existing feature stalled before the loop"** → `/speckit.pro.status` (find it) → `/speckit.pro.pickup <feature>`. The #1 reason features stall is "spec exists, never ran the implement loop"; pickup auto-detects the phase and resumes.
+3. **"Long autonomous run finished"** → `/speckit.pro.status <feature>` (verify) → review evaluator verdict in `.ai-knowledge/<feature>/evaluations/sprint-N.md` → if `/pro.local-review` ran, also skim `<SPEC_DIR>/local-reviews/` for the local findings + the evaluator's verdicts on them.
 
 ---
 
@@ -53,7 +134,7 @@ Standard SpecKit gives you powerful individual commands. SpecKit Pro wires them 
 ### From GitHub (recommended)
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.12.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.1.zip
 ```
 
 ### From source (local dev)
@@ -68,7 +149,7 @@ specify extension add --dev /path/to/speckit-pro
 
 ```bash
 specify extension list
-# ✓ SpecKit Pro (v1.12.0)
+# ✓ SpecKit Pro (v1.13.1)
 #   Autonomous long-run orchestration
 #   Commands: 8 | Hooks: 2 | Status: Enabled
 ```
@@ -79,10 +160,10 @@ To update to a newer release, remove the existing extension and re-add it:
 
 ```bash
 specify extension remove pro
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.12.0.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.13.1.zip
 ```
 
-Replace `v1.12.0` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
+Replace `v1.13.1` with the latest tag from [github.com/gen-by-ai/speckit-pro/releases](https://github.com/gen-by-ai/speckit-pro/releases).
 
 > **Note:** Updating replaces the extension files in `.specify/extensions/pro/` but does **not** touch your feature spec directories or `.ai-knowledge/` — all your `AGENT.md`, `contracts/`, `evaluations/`, and `progress.md` are untouched.
 
@@ -105,8 +186,10 @@ SpecKit Pro will:
 2. Run `/speckit.clarify` (auto)
 3. Run `/speckit.plan` (gate: review plan)
 4. Run `/speckit.tasks` → `after_tasks` hook auto-generates sprint contract
+4b. (optional) Run **`/speckit.pro.local-prep`** + **`/speckit.pro.materialize`** — local Ollama writes `repo-map.md`, `context-pack.md`, `risk-register.md`, `test-strategy.md`, `open-questions.md`, and per-task packets under `task-packets/`. Self-skips if `local_models.enabled: false` or Ollama is unreachable.
 5. Run `/speckit.analyze` (auto)
-6. Run the implement loop → `after_implement` hooks: optional **`speckit.pro.reconcile`** (writes **`pro-drift.md`**) → **`speckit.pro.evaluate`** → optional **`speckit.pro.knowledge-sync`** (writes **`pro-knowledge.md`**, only on evaluator PASS)
+6. Run the implement loop → 6b. (optional) Run **`/speckit.pro.local-review`** — local Ollama writes first-pass `implementation-review.md`, `test-gap-review.md`, `security-review.md` under `local-reviews/` with full evidence packs. Same self-skip rules as Phase 4b.
+7. `after_implement` hooks: optional **`speckit.pro.reconcile`** (writes **`pro-drift.md`**) → **`speckit.pro.evaluate`** (reads local-reviews if present; verifies before deciding PASS/NEEDS_REVISION/FAIL; writes one verdict event per local finding for `/pro.local-metrics`) → optional **`speckit.pro.knowledge-sync`** (writes **`pro-knowledge.md`**, only on evaluator PASS)
 
 ### Option B: Native Commands + Pro Hooks
 
@@ -154,6 +237,9 @@ If you've already done specify → plan → tasks:
 | `/speckit.pro.reconcile` | after `/speckit.implement` (before evaluate) | Spec drift review — writes **`pro-drift.md`** so specs stay honest vs code |
 | `/speckit.pro.evaluate` | after `/speckit.implement` | Strict QA evaluation: calibrates against past sprint scores, reads **`pro-drift.md`** if present, then drives the live app with **agent-browser** to test every CRITICAL criterion |
 | `/speckit.pro.knowledge-sync` | `before_specify` (prime) + after `/speckit.pro.evaluate` (sync, on PASS only) | Repo-level knowledge base: primes new specs from **`.repo-knowledge/`** before they're written; after evaluator PASS, diffs the sprint vs knowledge claims and writes **`pro-knowledge.md`** proposals. Never silently mutates the knowledge base. |
+| `/speckit.pro.local-prep` | Phase 4b (after `/speckit.tasks`) when `local_models.enabled` | Local Ollama writes the prep-phase Markdown — **`repo-map.md`**, **`context-pack.md`**, **`risk-register.md`**, **`test-strategy.md`**, **`open-questions.md`** — so the loop reads tight artifacts instead of regenerating them. Self-skips if disabled or Ollama is unreachable. |
+| `/speckit.pro.materialize` | Phase 4b (chained after `/pro.local-prep`) | Splits `tasks.md` into per-task packets under **`task-packets/TASK-NNN-<slug>.md`**. Local-model refined when Ollama is up; deterministic skeletons otherwise. The loop can load one packet per work unit instead of re-reading the whole spec set. |
+| `/speckit.pro.local-review` | Phase 6b (after the implement loop, before `/pro.evaluate`) | Local Ollama writes first-pass **`implementation-review.md`**, **`test-gap-review.md`**, **`security-review.md`** with mandatory evidence packs (file, lines, severity, evidence quote, suggested patch, confidence, disproof). The stronger evaluator verifies — local model never has the final say. |
 | `/speckit.pro.checkpoint` | manual | Commit + session snapshot + progress log entry |
 
 ### Loop & Observability
@@ -164,6 +250,7 @@ If you've already done specify → plan → tasks:
 | `/speckit.pro.status` | Rich status dashboard. With no feature arg, falls through to **Workspace Overview Mode** — lists every feature in `specs/` with its detected phase (`spec-only` / `plan-only` / `tasks-only` / `contracts-ready` / `in-loop` / `complete`) and the suggested pickup command. |
 | `/speckit.pro.resume` | Resume an interrupted run from last session checkpoint |
 | `/speckit.pro.compress` | Write `handoff.md` — clean context reset for the next sprint |
+| `/speckit.pro.local-metrics` | Read-only dashboard of local-model telemetry — per-task p50/p95 latency + failure rate, per-review-type precision/recall (vs evaluator), top dropped finding signatures, Ollama availability. Filters: `--since 30d|7d|24h|all`, `--feature <slug>`, `--task <name>`. `--json` for piping into charts. Pure Python; never calls Claude or Ollama. |
 
 ### Alias
 
@@ -211,6 +298,24 @@ context:
 # Model & agent
 model: "claude-sonnet-4.6"
 agent_cli: "copilot"        # copilot | claude | gemini | codex
+
+# Local Ollama sidecar (token offload — optional, off by default)
+local_models:
+  enabled: false                       # set true once `ollama serve` is running and a model is pulled
+  base_url: "http://localhost:11434"   # or http://workstation.local:11434 for remote Ollama
+  default_model:  "qwen2.5-coder:7b"
+  fast_model:     "llama3.2:3b"        # summaries / Markdown cleanup
+  code_model:     "qwen2.5-coder:7b"   # task packets, first-pass implementation review
+  review_model:   "qwen2.5-coder:7b"   # test-gap review
+  security_model: "qwen2.5-coder:7b"   # first-pass security screen (consider a larger model)
+  timeout_seconds: 180
+  num_ctx: 8192
+  temperature: 0.2
+  auto_run:
+    after_tasks:       true   # Phase 4b: /pro.local-prep + /pro.materialize
+    before_evaluate:   true   # Phase 6b: /pro.local-review
+  telemetry: true                                     # /pro.local-metrics reads this
+  metrics_file: ".ai-knowledge/local-metrics.jsonl"   # gitignored by default
 ```
 
 ### Environment Variable Overrides
@@ -510,6 +615,166 @@ Specs describe **one feature**. `AGENT.md` describes **how to run the project**.
 
 ---
 
+## Local Ollama sidecar (token offload, optional)
+
+The Claude extension is great for interactive work, but as Pro usage grows, the Claude-as-control-plane pattern starts costing real tokens for mostly-deterministic Markdown work. **Local Ollama models** can take over the prep + first-pass review surfaces: repo maps, context packs, task packets, risk registers, test strategies, and three flavors of review. Claude stays as the **premium worker** that verifies before anything ships.
+
+> From [`.dev-work/dev.md`](.dev-work/dev.md): "Claude should become a premium worker, not the whole factory." The sidecar is the structural answer to that.
+
+### Setup
+
+Off by default. To enable:
+
+```bash
+# 1. Install Ollama (macOS shown; Linux/Windows similar)
+brew install ollama
+ollama serve &
+
+# 2. Pull a code-capable 7B model
+ollama pull qwen2.5-coder:7b
+
+# 3. Turn it on in pro-config.yml
+#    .specify/extensions/pro/pro-config.yml
+```
+
+```yaml
+local_models:
+  enabled: true
+  base_url: "http://localhost:11434"
+```
+
+For Pi-class hardware, point at a workstation instead:
+
+```yaml
+local_models:
+  base_url: "http://workstation.local:11434"
+```
+
+or export `OLLAMA_BASE_URL` — the driver uses whichever resolves first.
+
+### What it writes — Phase 4b (after `/speckit.tasks`)
+
+`/speckit.pro.local-prep` then `/speckit.pro.materialize`:
+
+| File | Purpose | Reader |
+|---|---|---|
+| `<SPEC_DIR>/repo-map.md` | Relevant files, patterns, test commands, risks | Implementer |
+| `<SPEC_DIR>/risk-register.md` | Concrete risks with triggers, severity, mitigation, verifier | Implementer + evaluator |
+| `<SPEC_DIR>/test-strategy.md` | Commands + test-case ideas grounded in the project's CI | Implementer |
+| `<SPEC_DIR>/open-questions.md` | ≤ 10 sharp questions, multiple-choice when possible | Operator |
+| `<SPEC_DIR>/context-pack.md` | Compiled ≤ 1500-word bundle the loop reads instead of spec + plan + tasks | Implementer + evaluator |
+| `<SPEC_DIR>/task-packets/TASK-NNN-<slug>.md` | One self-contained packet per task | Implementer (per iteration) |
+
+The loop's context-load rule becomes:
+
+```
+1. handoff.md (always)
+2. context-pack.md (if present, replaces spec+plan+tasks)
+3. task-packets/TASK-<current>-<slug>.md (for the current work unit)
+```
+
+Typical token savings per iteration: **60–80 %**.
+
+### What it writes — Phase 6b (after the implement loop, before `/pro.evaluate`)
+
+`/speckit.pro.local-review`:
+
+| File | Reviewer focus | Model (default) |
+|---|---|---|
+| `<SPEC_DIR>/local-reviews/implementation-review.md` | Correctness, regression risk, contract violations | `code_model` |
+| `<SPEC_DIR>/local-reviews/test-gap-review.md` | Acceptance criteria not exercised by tests | `review_model` |
+| `<SPEC_DIR>/local-reviews/security-review.md` | Injection, authz, crypto, secrets, unsafe defaults | `security_model` |
+
+### Evidence-pack discipline (MDASH-inspired)
+
+Every local-review finding must include all eleven fields below. A finding without a file and a line range is **dropped**:
+
+- File · Lines · Severity · Category · What · **Evidence (quote)** · Why-it-matters · Suggested patch · Confidence · **Disproof** · Maps-to-AC
+
+From the security prompt: _"Prefer 3 high-confidence findings to 20 maybe-findings."_ Low false-positive rate is the first-class design goal — a noisy reviewer that the evaluator stops trusting is worse than no reviewer.
+
+### Drafts, not truth
+
+Every local artifact starts with a provenance banner:
+
+> _Generated by local model `qwen2.5-coder:7b` via `ollama-md.py`. Claims require verification before implementation._
+
+That banner is intentional — it stops downstream agents (and humans in PR review) from treating local output as ground truth. The stronger evaluator (`/pro.evaluate`) reads the drafts and verifies; it is **not bound by** what the local model said or missed.
+
+### Graceful degradation
+
+If Ollama is not running, the driver self-skips with a one-line note and exits 0. The pipeline continues with v1.12 behavior — no aborts, ever. To opt out entirely, set `local_models.enabled: false`.
+
+### Order of adoption — don't make Ollama the implementer first
+
+From `.dev-work/dev.md`, in order of token savings × judgment safety:
+
+1. Repo maps + summaries
+2. Task packets
+3. Test strategies
+4. First-pass review
+
+Steps 1–4 are where the savings live. Implementation by local 7B models is risky and **not recommended** without much stronger guarantees.
+
+### Telemetry & quality metrics — `/speckit.pro.local-metrics`
+
+The sidecar emits three event types into `.ai-knowledge/local-metrics.jsonl` (gitignored, workspace state):
+
+| Event | Written by | When |
+|---|---|---|
+| `call` | `scripts/local/ollama-md.py` | Every Ollama invocation — success and failure |
+| `verdict` | `/pro.evaluate` Step 4c | Once per finding in `local-reviews/*.md` — `agreed`, `kept`, `dropped`, `unverifiable`, or `missed` |
+| `skip` | `pro-local-prep.sh` / `pro-local-review.sh` / `pro-materialize.sh` | When the driver self-skips because Ollama is unreachable (one event per run) |
+
+`/speckit.pro.local-metrics` reads the file and prints:
+
+```
+  SpecKit Pro — local-model metrics (30d window)
+────────────────────────────────────────────────────────────────────────
+  Calls: 142   Failures: 3 (2.1%)   Wall: 51.4 min   Output: 412 KiB
+────────────────────────────────────────────────────────────────────────
+  TASK                       CALLS       p50       p95    FAIL  MODELS
+  task-packet                   48     11.0s     17.4s    0 (  0%)  qwen2.5-coder:7b
+  repo-map                      24     14.2s     22.1s    0 (  0%)  qwen2.5-coder:7b
+  ...
+────────────────────────────────────────────────────────────────────────
+  REVIEW QUALITY (vs evaluator verdicts)
+  TYPE                      PROD   AGR  KEPT  DROP   UV  MISS    PREC   RECALL
+  implementation-review        18    11     2     5    0     6      72%     68%
+  test-gap-review              12     7     3     2    0     4      83%     71%
+  security-review               8     5     2     1    0     5      88%     58%
+────────────────────────────────────────────────────────────────────────
+  AVAILABILITY  (driver self-skipped before any Ollama call)
+  Total skips: 4
+    ollama-unreachable            4x
+────────────────────────────────────────────────────────────────────────
+```
+
+**Precision** = `(agreed + kept) ÷ (agreed + kept + dropped)` — what fraction of local findings survived evaluator verification.
+**Recall** = `(agreed + kept) ÷ (agreed + kept + missed)` — what fraction of real findings local actually caught.
+
+Filters: `--since 30d|7d|24h|all`, `--feature <slug>`, `--task <name>`. `--json` for piping into charts.
+
+### How to read the signal
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| p95 latency creeping up for one task | `num_ctx` too large for the model | Try smaller model or `num_ctx: 4096` |
+| One task failing often | Model not pulled, or context exceeds capacity | `ollama pull <name>`; check the `error` field in the JSONL |
+| Review precision < 60 % | Prompt is over-eager | Tighten evidence-pack requirements, add anti-patterns |
+| Review recall < 50 % | Model too weak for the surface | Move that review type to a 13B+ model, or back to Claude |
+| One signature dominates "top dropped" | Systematic false positive | Add explicit anti-pattern to the prompt template |
+| Many `ollama-unreachable` skips | Daemon flaky or `base_url` misconfigured | Verify `ollama serve` and the URL |
+
+### Roadmap (deliberately not in v1.13)
+
+- **Layer 2 — Golden bench (`benchmarks/local/`)**: 2–3 fixed spec/plan/tasks bundles re-run on every prompt-template change. Maps to the MDASH "private ground-truth corpora" lesson. Worth building once layer 1 data shows which prompts are unstable.
+- **Layer 3 — A/B model routing**: two models compete per task; metrics decide the winner. Worth building once we have an actual model-choice question to answer with data.
+
+Layer 1 needs real usage before we know which signals matter, so layers 2 and 3 are intentionally out-of-scope for this release.
+
+---
+
 ## Supported Agent CLIs
 
 SpecKit Pro auto-detects your installed agent CLI. Supported:
@@ -541,12 +806,24 @@ speckit-pro/
 │   ├── pro.status.md              # → /speckit.pro.status  — single-feature dashboard + workspace overview mode
 │   ├── pro.resume.md              # → /speckit.pro.resume  — resume from checkpoint
 │   ├── pro.checkpoint.md          # → /speckit.pro.checkpoint  — named checkpoint with PR-safe staging
-│   └── pro.compress.md            # → /speckit.pro.compress  — context reset / handoff.md
+│   ├── pro.compress.md            # → /speckit.pro.compress  — context reset / handoff.md
+│   ├── pro.local-prep.md          # → /speckit.pro.local-prep  — Ollama writes repo-map/context-pack/risk/test/open-Qs (Phase 4b)
+│   ├── pro.local-review.md        # → /speckit.pro.local-review  — Ollama writes first-pass impl/test-gap/security review (Phase 6b)
+│   ├── pro.materialize.md         # → /speckit.pro.materialize  — splits tasks.md into per-task packets (Phase 4b)
+│   └── pro.local-metrics.md       # → /speckit.pro.local-metrics  — telemetry dashboard (latency, FP rate, precision/recall)
 ├── scripts/
 │   ├── bash/
 │   │   ├── pro-orchestrate.sh     # Gen/eval loop orchestrator (macOS/Linux)
 │   │   ├── pro-status.sh          # Status reporter
-│   │   └── pro-checkpoint.sh      # Checkpoint helper
+│   │   ├── pro-checkpoint.sh      # Checkpoint helper
+│   │   ├── pro-local-prep.sh      # Driver — orchestrates Ollama workers for prep artifacts
+│   │   ├── pro-local-review.sh    # Driver — orchestrates Ollama workers for first-pass reviews
+│   │   ├── pro-materialize.sh     # Driver — task-packet materializer (deterministic + Ollama-refined)
+│   │   ├── pro-local-metrics.sh   # Driver — reads .ai-knowledge/local-metrics.jsonl, prints dashboard
+│   │   └── lib/
+│   │       └── pro-local-common.sh # Shared bash lib: config reader, model routing, telemetry helpers
+│   ├── local/
+│   │   └── ollama-md.py           # HTTP client for Ollama /api/chat — emits JSONL telemetry per call
 │   └── powershell/
 │       └── pro-orchestrate.ps1    # Gen/eval loop orchestrator (Windows)
 ├── agents/
@@ -556,20 +833,41 @@ speckit-pro/
 │   ├── progress-template.md       # Progress log template
 │   ├── contract-template.md       # Sprint contract template (eight-column schema with State + Browser Test rows)
 │   ├── handoff-template.md        # Context reset handoff template
-│   └── browser-test-template.sh   # Canonical hermetic agent-browser test shape (one row per script)
+│   ├── browser-test-template.sh   # Canonical hermetic agent-browser test shape (one row per script)
+│   └── local/                     # Prompt templates for the local Ollama sidecar
+│       ├── repo-map.prompt.md
+│       ├── context-pack.prompt.md
+│       ├── task-packet.prompt.md
+│       ├── test-strategy.prompt.md
+│       ├── risk-register.prompt.md
+│       ├── open-questions.prompt.md
+│       ├── implementation-review.prompt.md
+│       ├── test-gap-review.prompt.md
+│       └── security-review.prompt.md
 ├── pro-config.template.yml        # Configuration template
 ├── README.md
 ├── CHANGELOG.md
 └── .extensionignore               # Distribution exclusions
 
-# Generated per-feature (inside .specify/<feature-dir>/) — transient state only
-.specify/<feature>/
+# Generated per-feature (inside specs/<feature-dir>/) — transient state only
+specs/<feature>/
 ├── spec.md / plan.md / tasks.md   # Native SpecKit artifacts
 ├── handoff.md                     # Per-sprint context reset artifact (transient)
 ├── pro-drift.md                   # Spec-vs-code drift findings (from /pro.reconcile)
 ├── pro-knowledge.md               # Knowledge-base sync proposals (from /pro.knowledge-sync)
 ├── spec-patches.md                # Cited spec proposals (from /pro.deepen)
 ├── spec-questions.md              # Human-input file for unresolved gaps (from /pro.deepen)
+├── repo-map.md                    # Files/patterns/tests/risks (from /pro.local-prep — Ollama sidecar)
+├── context-pack.md                # Compiled ≤1500-word loop substrate (from /pro.local-prep)
+├── risk-register.md               # Concrete risks with triggers (from /pro.local-prep)
+├── test-strategy.md               # Commands + case ideas (from /pro.local-prep)
+├── open-questions.md              # ≤10 focused human questions (from /pro.local-prep)
+├── task-packets/                  # Per-task self-contained packets (from /pro.materialize)
+│   └── TASK-NNN-<slug>.md
+├── local-reviews/                 # First-pass review with evidence packs (from /pro.local-review)
+│   ├── implementation-review.md
+│   ├── test-gap-review.md
+│   └── security-review.md
 ├── browser-tests/                 # Durable agent-browser test scripts — one per CRITICAL contract row
 │   ├── _template.sh               #   Reference copy of templates/browser-test-template.sh
 │   └── <flow>/<NN>-<state>.sh     #   Hermetic, single-assertion, time-boxed; run by evaluator every sprint (regression carry-forward)
@@ -584,12 +882,14 @@ speckit-pro/
 └── runbooks/                      # End-to-end flow traces
 
 # Persistent knowledge — survives extension updates
-.ai-knowledge/<feature>/
-├── AGENT.md                       # Loop's self-written project memory (grows each iteration)
-├── init.sh                        # Auto-generated smoke test (run before every work unit)
-├── progress.md                    # Iteration audit trail
-├── contracts/sprint-N.md          # Sprint contracts (one per sprint)
-└── evaluations/sprint-N.md        # Evaluator verdicts with browser test results
+.ai-knowledge/
+├── local-metrics.jsonl            # JSONL telemetry — call/verdict/skip events (workspace-wide)
+└── <feature>/
+    ├── AGENT.md                   # Loop's self-written project memory (grows each iteration)
+    ├── init.sh                    # Auto-generated smoke test (run before every work unit)
+    ├── progress.md                # Iteration audit trail
+    ├── contracts/sprint-N.md      # Sprint contracts (one per sprint)
+    └── evaluations/sprint-N.md    # Evaluator verdicts with browser test results
 ```
 
 ---
@@ -624,7 +924,11 @@ speckit-pro/
 
 14. **Seed `.repo-knowledge/` before you turn on `knowledge.enabled`** — a knowledge base full of auto-generated guesses is worse than none. Hand-curate `INDEX.md` and at least one `domain/<bounded-context>.md` first; then flip the switch and let `/pro.knowledge-sync` propose updates against curated ground truth. Treat `pro-knowledge.md` like a PR review queue — most proposals are right, but the breaking-tier ones earn their name.
 
-14. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
+15. **Keep `.ai-knowledge/` workspace-only** — `commit.commit_artifacts: false` (the default) means checkpoints never stage `specs/` or `.ai-knowledge/`. This avoids the common pain of force-pushing to remove SpecKit artifacts before opening a PR. If your team versions specs intentionally, set `commit_artifacts: true` — `.ai-knowledge/` is still excluded regardless.
+
+16. **Turn on the local Ollama sidecar once Pro usage grows past hobby scale** — the offload is the structural fix for "Claude is the control plane" cost. Order of adoption: enable `local_models.enabled: true` first with **only** `auto_run.after_tasks: true` so you get the prep artifacts (cheap wins, low risk). Watch `/pro.local-metrics` for a few features. Once latency p95 is comfortable and failure rate is <5%, also enable `auto_run.before_evaluate: true` for the first-pass review screens. Never make the local model the implementer — that's a different cost/quality trade-off than offloading prep.
+
+17. **Read `/pro.local-metrics` weekly while you're tuning** — the numbers tell you which prompts and which models earn their keep. **Precision <60% on a review type** = the prompt is over-eager (tighten evidence requirements). **Recall <50%** = the model is undersized for the surface (move to a 13B+ model or back to Claude for that review type). **One signature dominating "top dropped"** = systematic false positive worth adding as an explicit anti-pattern in the prompt template. **Many `ollama-unreachable` skips** = Ollama daemon or `base_url` is flaky and needs investigation, not just a config tweak.
 
 ---
 
