@@ -14,14 +14,30 @@ $ARGUMENTS
 
 The arguments are passed as the feature description to `/speckit.specify`. If empty, ask the user for a feature description before proceeding.
 
-## Phase 0 — Knowledge Prime (optional)
+## Knowledge integration (mandatory when `knowledge.enabled: true`)
+
+`/speckit.pro.go` must invoke `/speckit.pro.knowledge-sync` at every touchpoint below. Do not rely on hooks alone when running the full pipeline in chat — hooks may be skipped or disabled in the project.
+
+| Step | Phase | Mode | Skip when |
+|------|-------|------|-----------|
+| 1 | 0 — start | `prime` | `knowledge.enabled: false` or `prime_before_specify: false` |
+| 2 | 2.5 — after clarify | `prime` | `prime_before_plan: false` |
+| 3 | 4 — after tasks | `prime` | `prime_before_contract: false` |
+| 4 | 5a — before implement | `prime` | `prime_before_implement: false` |
+| 5 | 6 — each loop iteration | `prime` | `prime_each_loop_iteration: false` |
+| 6 | 7 — after evaluate PASS | `sync` | `sync_after_evaluate: false` |
+
+Keep every `<pro-knowledge-prime>` block in context until the next prime replaces it. On first run with no `.knowledge/`, run `--mode bootstrap` first (or let auto-bootstrap run).
+
+## Phase 0 — Knowledge Prime
 
 Before *anything else*, ground the agent in repo-level context so the spec it's about to write doesn't reinvent terms, violate invariants, or duplicate work in an existing bounded context.
 
 Skip entirely if any of the following is true:
-- `<PROJECT_ROOT>/.repo-knowledge/` does not exist (the knowledge base hasn't been adopted yet), or
-- `knowledge.enabled: false` in `pro-config.yml` (default), or
+- `knowledge.enabled: false` in `pro-config.yml`, or
 - `knowledge.prime_before_specify: false`.
+
+If `.knowledge/` is missing and `knowledge.auto_bootstrap: true`, run `/pro.knowledge-sync --mode bootstrap` first (creates starter files — edit `INDEX.md` and `domain/invariants.md` before treating output as authoritative).
 
 Otherwise:
 
@@ -31,7 +47,7 @@ EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<$ARGUMENTS>"
 
 The command emits a `<pro-knowledge-prime>` block to stdout — keep it in context for the remainder of `/pro.go`. It is **retrieval-only**: nothing is written, nothing is committed. If retrieval returns zero hits, surface the "unexplored territory" note before continuing — that's a signal to the human reviewer at the spec gate that this feature may need a new bounded context.
 
-This phase costs one extra agent call (~5–15s with a warm `repo-ai` index). It is disabled by default; turn it on after the team has hand-curated at least `INDEX.md` and one domain file under `.repo-knowledge/`. An empty knowledge base produces empty primes — no harm, but no value either.
+Keep the `<pro-knowledge-prime>` block in context for the entire pipeline. Replace template placeholders in `.knowledge/` with real decision-tree rules as soon as you can — primes are only as good as `INDEX.md` and `domain/invariants.md`.
 
 ## Pre-Flight: Existing-Feature Scan
 
@@ -54,8 +70,8 @@ Before generating a new spec, check whether the same work is already in flight. 
    | spec.md only | `spec-only` | `/speckit.plan` |
    | spec.md + plan.md | `plan-only` | `/speckit.tasks` |
    | spec.md + plan.md + tasks.md (no contracts/) | `tasks-only` | `/pro.contract` then `/pro.pickup <feature>` |
-   | + contracts/ but no `.ai-knowledge/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
-   | + `.ai-knowledge/<feature>/` exists | `in-loop` | `/pro.resume` |
+   | + contracts/ but no `.knowledge/features/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
+   | + `.knowledge/features/<feature>/` exists | `in-loop` | `/pro.resume` |
    | tasks.md fully checked off | `complete` | (none — already done) |
 
 5. **Decision prompt** — if any matches found:
@@ -101,19 +117,19 @@ Display the run plan and ask "Proceed? (yes/no)":
 ┌──────────────────────────────────────────────────────────────┐
 │  SpecKit Pro — Pipeline Runner                               │
 ├──────────────────────────────────────────────────────────────┤
-│  0. /pro.knowledge-sync --mode prime  (skipped if disabled)  │
+│  0. /pro.knowledge-sync --mode prime  (bootstrap if needed)  │
 │  1. /speckit.specify    gate: [YES|NO]                       │
 │  1c. /pro.deepen        (skipped if disabled; pauses for     │
 │                          human Qs, then /pro.deepen --apply) │
 │  2. /speckit.clarify    skip: [YES|NO]                       │
+│  2.5 /pro.knowledge-sync prime (before plan)                   │
 │  3. /speckit.plan       gate: [YES|NO]                       │
-│  4. /speckit.tasks      → pro.contract (auto via hook)       │
-│  4b. /pro.local-prep    → /pro.materialize  (Ollama, opt-in) │
+│  4. /speckit.tasks      → prime → pro.contract                │
+│  4b. /pro.local-prep    → /pro.materialize                    │
+│  5a. /pro.knowledge-sync prime (before implement)             │
 │  5. /speckit.analyze    skip: [YES|NO]                       │
-│  6. implement loop      max: N iterations                    │
-│  6b. /pro.local-review  (Ollama, opt-in)                     │
-│  7. after_implement     → reconcile → evaluate               │
-│                         → knowledge-sync (on PASS only)      │
+│  6. loop (+ prime each iter)  max: N                          │
+│  7. reconcile → local-review → evaluate → knowledge-sync      │
 ├──────────────────────────────────────────────────────────────┤
 │  Model: <model>  │  Agent CLI: <agent_cli>                   │
 │  Local: <local_models.enabled>  (Ollama sidecar)             │
@@ -178,7 +194,7 @@ No gate.
 
 ### Phase 1c — Deepen (optional)
 
-Adversarially audit the draft spec before clarify runs. The deepener investigates gaps autonomously from local sources (`.repo-knowledge/`, code, sibling specs, git history) and from any capability-matched external sources (issue tracker, docs system), then asks the operator only the questions no source can answer.
+Adversarially audit the draft spec before clarify runs. The deepener investigates gaps autonomously from local sources (`.knowledge/`, code, sibling specs, git history) and from any capability-matched external sources (issue tracker, docs system), then asks the operator only the questions no source can answer.
 
 Skip entirely if any of the following is true:
 - `deepen.enabled: false` in `pro-config.yml` (default off — opt-in), or
@@ -218,6 +234,20 @@ EXECUTE_COMMAND: /speckit.clarify
 ```
 No gate (auto-continue).
 
+### Phase 2.5 — Knowledge Prime (before plan, optional)
+
+Re-ground the agent before technical planning widens scope.
+
+Skip if `knowledge.enabled: false` or `knowledge.prime_before_plan: false`.
+
+Otherwise, after Phase 2 (clarify) completes:
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<spec.md H1 + first P1 user story title>"
+```
+
+Keep the new `<pro-knowledge-prime>` block in context through Phase 3.
+
 ### Phase 3 — Plan
 ```
 EXECUTE_COMMAND: /speckit.plan
@@ -228,10 +258,19 @@ Gate: `gates.after_plan`
 ```
 EXECUTE_COMMAND: /speckit.tasks
 ```
-The `after_tasks` hook automatically fires `/pro.contract` to generate the sprint contract and a checkpoint. If the hook is skipped, print a reminder:
+
+**Knowledge prime (before contract)** — skip if `knowledge.enabled: false` or `knowledge.prime_before_contract: false`:
+
 ```
-[Pro] Tip: Run /pro.contract to generate the sprint contract before implementing.
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<spec.md H1 + plan.md top-level components>"
 ```
+
+Then ensure a sprint contract exists. The `after_tasks` hook usually fires `/pro.contract`; if it did not:
+
+```
+EXECUTE_COMMAND: /pro.contract
+```
+
 Gate: `gates.after_tasks`
 
 ### Phase 4b — Local Prep (optional, Ollama sidecar)
@@ -239,7 +278,7 @@ Gate: `gates.after_tasks`
 Offload token-heavy prep Markdown to a local model so the implement loop reads tight artifacts instead of regenerating them. From `.dev-work/dev.md`: Claude becomes a premium worker, not the whole factory.
 
 Skip entirely if any of the following is true:
-- `local_models.enabled: false` in `pro-config.yml` (default), or
+- `local_models.enabled: false` in `pro-config.yml`, or
 - `local_models.auto_run.after_tasks: false`, or
 - the Ollama HTTP endpoint at `local_models.base_url` is unreachable (the driver self-detects within 3 seconds).
 
@@ -263,6 +302,16 @@ Every local artifact is prepended with a provenance banner (`Generated by local 
 
 No gate. Auto-continue. If both commands self-skip, this phase is a no-op.
 
+### Phase 5a — Knowledge Prime (before implement, optional)
+
+Skip if `knowledge.enabled: false` or `knowledge.prime_before_implement: false`.
+
+Otherwise, immediately before Phase 6:
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<spec.md H1 + next incomplete tasks.md phase heading>"
+```
+
 ### Phase 5 — Analyze
 Skip if `quality.run_analyze: false`.
 ```
@@ -284,17 +333,18 @@ Before the implement loop, set up the workspace state directory. This phase has 
 
 ```bash
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/<feature-slug>"
-mkdir -p "$AI_KNOWLEDGE_DIR/contracts" "$AI_KNOWLEDGE_DIR/evaluations"
+FEATURE_KNOWLEDGE_DIR="$PROJECT_ROOT/.knowledge/features/<feature-slug>"
+mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts" "$FEATURE_KNOWLEDGE_DIR/evaluations"
 ```
 
 #### 5b.2 — Ensure `.gitignore` excludes workspace state
 
-`.ai-knowledge/` is machine-generated workspace state and **must not** land in feature-branch commits intended for PR review. Read `<PROJECT_ROOT>/.gitignore`. If it does not contain `.ai-knowledge/` (or `.ai-knowledge`), append:
+`.knowledge/features/` and `.knowledge/metrics/` are machine-generated workspace state and **must not** land in feature-branch commits intended for PR review. Read `<PROJECT_ROOT>/.gitignore`. If it does not contain `.knowledge/features/`, append:
 
 ```
-# SpecKit Pro — workspace-only autonomous-run state
-.ai-knowledge/
+# SpecKit Pro — workspace-only autonomous-run state (never commit)
+.knowledge/features/
+.knowledge/metrics/
 ```
 
 For `specs/`, behavior depends on `commit_artifacts` config (default `false`):
@@ -308,7 +358,7 @@ If `.gitignore` already contains either pattern, skip silently.
 
 #### 5b.3 — Stack-aware `init.sh`
 
-If `<AI_KNOWLEDGE_DIR>/init.sh` already exists, skip. Otherwise, **detect the stack** by checking which markers exist in `<PROJECT_ROOT>` (or in the most relevant subdir per `plan.md`):
+If `<FEATURE_KNOWLEDGE_DIR>/init.sh` already exists, skip. Otherwise, **detect the stack** by checking which markers exist in `<PROJECT_ROOT>` (or in the most relevant subdir per `plan.md`):
 
 | Marker | Stack | Default smoke test |
 |---|---|---|
@@ -338,11 +388,11 @@ cd "$(git rev-parse --show-toplevel)"
 echo "[init.sh] smoke test: OK"
 ```
 
-Make executable: `chmod +x "$AI_KNOWLEDGE_DIR/init.sh"`.
+Make executable: `chmod +x "$FEATURE_KNOWLEDGE_DIR/init.sh"`.
 
 #### 5b.4 — AGENT.md prepopulation
 
-Create `<AI_KNOWLEDGE_DIR>/AGENT.md` only if it doesn't already exist. Seed it from real project files, not placeholders. Read these in parallel and extract relevant lines:
+Create `<FEATURE_KNOWLEDGE_DIR>/AGENT.md` only if it doesn't already exist. Seed it from real project files, not placeholders. Read these in parallel and extract relevant lines:
 
 - **`package.json`** scripts → `dev`, `start`, `test`, `lint`, `build`, `typecheck`
 - **`Makefile`** → first 30 targets (or all `## comment`-style documented targets)
@@ -386,7 +436,7 @@ Last updated: <ISO timestamp>
 
 **Why prepopulate**: the loop currently *discovers* facts like "yarn test needs Docker" mid-sprint and writes them in. Seeding AGENT.md from CI workflows + project rules + memory shortcuts that discovery and prevents iteration 1 from failing on environmental issues that were already known.
 
-These files live at **project root** under `.ai-knowledge/<feature-slug>/`. They persist across extension updates.
+These files live at **project root** under `.knowledge/features/<feature-slug>/`. They persist across extension updates.
 
 ### Phase 6 — Implement Loop
 
@@ -398,6 +448,14 @@ These files live at **project root** under `.ai-knowledge/<feature-slug>/`. They
 For each iteration N = 1, 2, 3 … up to `<loop.max_iterations>`:
 
 ---
+
+**0. Knowledge prime (each iteration)** — skip if `knowledge.enabled: false` or `knowledge.prime_each_loop_iteration: false`:
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<spec.md H1> <current work-unit heading>"
+```
+
+Keep `<pro-knowledge-prime>` in context for this iteration (same rules as `pro.loop.md`).
 
 **Print at the start of every iteration:**
 ```
@@ -414,18 +472,18 @@ Context-loading priority (cheapest sufficient bundle wins):
    - Load `<SPEC_DIR>/context-pack.md` and `<SPEC_DIR>/tasks.md` — the context-pack is the compiled ≤ 1500-word substitute for spec + plan + tasks. Mind its banner: claims need verification before action.
 3. Otherwise (first iteration, no handoff, no context-pack):
    - Load `<SPEC_DIR>/spec.md`, `<SPEC_DIR>/plan.md`, `<SPEC_DIR>/tasks.md`
-   - Load last 10 entries of `<AI_KNOWLEDGE_DIR>/progress.md` (if file exists)
+   - Load last 10 entries of `<FEATURE_KNOWLEDGE_DIR>/progress.md` (if file exists)
    - Load `<SPEC_DIR>/session.md` (if exists)
 
 If the work unit corresponds to a known task ID and `<SPEC_DIR>/task-packets/TASK-<id>-<slug>.md` exists (written by `/pro.materialize`), load that packet too — it replaces the need to re-derive the work unit's scope from scratch.
 
-Always load `<AI_KNOWLEDGE_DIR>/AGENT.md` if it exists — it contains project-specific commands and gotchas discovered in previous iterations.
+Always load `<FEATURE_KNOWLEDGE_DIR>/AGENT.md` if it exists — it contains project-specific commands and gotchas discovered in previous iterations.
 
 **2. Smoke test**
 
-If `<AI_KNOWLEDGE_DIR>/init.sh` exists, run it in the terminal:
+If `<FEATURE_KNOWLEDGE_DIR>/init.sh` exists, run it in the terminal:
 ```bash
-bash <AI_KNOWLEDGE_DIR>/init.sh
+bash <FEATURE_KNOWLEDGE_DIR>/init.sh
 ```
 - Exit 0 → note `[smoke-test: OK]` in the progress entry
 - Non-zero → fix the break before implementing new features, log the fix
@@ -440,7 +498,7 @@ Count to show: `<completed>/<total> tasks (<N-1> iterations used)`.
 
 Find the first incomplete phase/section in `tasks.md` (a heading whose tasks still contain `- [ ]`).
 
-Check for `<AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md`:
+Check for `<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md`:
 - If it exists: read it — implement against its acceptance criteria, not just the task list.
 - If it does NOT exist: create it now (see `pro.loop.md` Sprint Contract section for the required format). The contract is your commitment to the evaluator.
 
@@ -457,7 +515,7 @@ Signal underspecified requirements with `<pro-uncertainty>…</pro-uncertainty>`
 
 **6. Append to progress log**
 
-Append to `<AI_KNOWLEDGE_DIR>/progress.md` (create with header if missing):
+Append to `<FEATURE_KNOWLEDGE_DIR>/progress.md` (create with header if missing):
 
 ```markdown
 ## Iteration <N> — <ISO timestamp>
@@ -489,11 +547,11 @@ If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete:
 git add .
 git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)"
 ```
-Log the commit hash in `<AI_KNOWLEDGE_DIR>/progress.md`.
+Log the commit hash in `<FEATURE_KNOWLEDGE_DIR>/progress.md`.
 
 **9. Update AGENT.md**
 
-Review what you learned this iteration. If you discovered anything new about how to build, run, or test this project, append it to `<AI_KNOWLEDGE_DIR>/AGENT.md`. Keep each bullet under 20 words. This file is read at the top of every future iteration.
+Review what you learned this iteration. If you discovered anything new about how to build, run, or test this project, append it to `<FEATURE_KNOWLEDGE_DIR>/AGENT.md`. Keep each bullet under 20 words. This file is read at the top of every future iteration.
 
 **Print at the end of every iteration:**
 ```
@@ -504,7 +562,7 @@ Then immediately begin iteration N+1 without waiting for user input. **Do not st
 
 ---
 
-The `pro-orchestrate.sh` script is the correct runner when invoked from a terminal (not VS Code Chat). It passes `--ai-knowledge-dir` to each loop invocation and handles circuit-breaking for long runs.
+The `pro-orchestrate.sh` script is the correct runner when invoked from a terminal (not VS Code Chat). It passes `--knowledge-feature-dir` to each loop invocation and handles circuit-breaking for long runs.
 
 ### Phase 6b — Local Review (optional, Ollama sidecar)
 
@@ -531,9 +589,43 @@ When `/pro.evaluate` runs next, it loads these drafts alongside the sprint contr
 
 No gate. Auto-continue. Self-skips silently if local models are off.
 
+### Phase 7 — Post-implement (reconcile, evaluate, knowledge sync)
+
+Run **after** the implement loop finishes (all tasks `[x]` or max iterations with operator consent to stop). This phase is part of `/pro.go` — do not defer to hooks only.
+
+**7a. Reconcile** — always run when the loop produced code changes:
+
+```
+EXECUTE_COMMAND: /pro.reconcile
+```
+
+**7b. Local review** — same rules as Phase 6b (if not already run after the last sprint):
+
+```
+EXECUTE_COMMAND: /pro.local-review
+```
+
+**7c. Evaluate** — mandatory for a completed pipeline:
+
+```
+EXECUTE_COMMAND: /pro.evaluate
+```
+
+Parse the evaluator's `<pro-eval>` tag from stdout. Proceed to 7d only if the verdict is **PASS**.
+
+**7d. Knowledge sync** — skip if `knowledge.enabled: false` or `knowledge.sync_after_evaluate: false`. Otherwise (PASS required):
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync
+```
+
+Default mode is `sync`. Writes `<FEATURE_DIR>/pro-knowledge.md` and may auto-apply additive edits per `knowledge.auto_apply_tier`. If the evaluator did not PASS, print `[Pro] Skipping knowledge-sync — evaluator did not PASS.` and do not run sync.
+
+Append to `session.md`: `Phase 7 complete — reconcile, evaluate, knowledge-sync (if PASS).`
+
 ## Completion
 
-After all phases complete successfully:
+After Phase 7 (and all prior phases) complete successfully:
 
 ```
 ╔═══════════════════════════════════════════════════════════╗
@@ -544,8 +636,6 @@ After all phases complete successfully:
 ║  Branch:   <git branch>                                   ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Next: /pro.status   to see detailed progress
-      /pro.reconcile after implement to record spec drift (pro-drift.md)
-      /pro.evaluate to run a final QA evaluation
-      /pro.knowledge-sync to refresh .repo-knowledge/ against the merged code
+Next: /pro.status <feature>   — detailed progress
+      Review <FEATURE_DIR>/pro-drift.md and pro-knowledge.md (if written)
 ```

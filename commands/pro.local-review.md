@@ -68,7 +68,7 @@ For each review the driver feeds the model the smallest useful context bundle:
 
 - **implementation-review**: diff, changed-files, latest sprint contract, risk-register.md
 - **test-gap-review**: diff, changed-files, test-files-in-change-set, sprint contract, test-strategy.md
-- **security-review**: diff, changed-files, sprint contract, risk-register.md, `.repo-knowledge/security.md` (if present)
+- **security-review**: diff, changed-files, sprint contract, risk-register.md, `.knowledge/security.md` (if present)
 
 ### 4. Run the driver
 
@@ -84,7 +84,7 @@ The driver writes findings to `<SPEC_DIR>/local-reviews/`. Each file begins with
 ### 5. Hand off to the evaluator
 
 When the implement loop is finished, `/pro.evaluate` (Claude) reads:
-- `<AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md` (acceptance criteria)
+- `<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md` (acceptance criteria)
 - `<SPEC_DIR>/local-reviews/*.md` (this command's output)
 - The actual code
 

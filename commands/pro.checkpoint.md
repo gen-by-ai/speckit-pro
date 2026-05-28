@@ -39,11 +39,11 @@ If `$ARGUMENTS` provides a label, use it. Otherwise auto-generate:
 
 ### 3. Stage and commit
 
-Use **PR-safe staging** — never include `.ai-knowledge/` (machine-generated workspace state). Default is also to exclude `specs/` unless `commit_artifacts: true` is set in `pro-config.yml`:
+Use **PR-safe staging** — never include `.knowledge/features/` (machine-generated workspace state). Default is also to exclude `specs/` unless `commit_artifacts: true` is set in `pro-config.yml`:
 
 ```bash
-# Always exclude .ai-knowledge/. Exclude specs/ unless commit_artifacts is true.
-git add -- ':!.ai-knowledge' ':!.ai-knowledge/**' \
+# Always exclude .knowledge/features/. Exclude specs/ unless commit_artifacts is true.
+git add -- ':!.knowledge/features' ':!.knowledge/features/**' ':!.knowledge/metrics' ':!.knowledge/metrics/**' \
   $([ "$COMMIT_ARTIFACTS" = "true" ] || echo "':!specs' ':!specs/**'") .
 
 git commit -m "[Pro] Checkpoint: <label> (<completed>/<total> tasks, phase: <phase>)"
@@ -53,7 +53,7 @@ If there are no changes to commit: output `[Pro] Checkpoint skipped — no uncom
 
 **Sanity check** after staging:
 ```bash
-git diff --cached --name-only | grep -E '^\.ai-knowledge/' && {
+git diff --cached --name-only | grep -E '^\.knowledge/features/' && {
   echo "[Pro] Refusing to commit workspace-only paths — unstage and retry."
   exit 1
 }

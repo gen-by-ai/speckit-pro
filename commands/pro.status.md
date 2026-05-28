@@ -32,7 +32,7 @@ Triggered when no active feature is detected, or when user passes `--workspace` 
 ```bash
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 SPECS_DIR="$PROJECT_ROOT/specs"
-AI_KNOWLEDGE_ROOT="$PROJECT_ROOT/.ai-knowledge"
+KNOWLEDGE_FEATURES_ROOT="$PROJECT_ROOT/.knowledge/features"
 ```
 
 For each subdirectory under `specs/`:
@@ -42,8 +42,8 @@ For each subdirectory under `specs/`:
 | `spec.md` only | `spec-only` | `/speckit.plan` |
 | + `plan.md` | `plan-only` | `/speckit.tasks` |
 | + `tasks.md` (any `[ ]`), no contracts/ | `tasks-only` | `/pro.contract` then `/pro.pickup <feature>` |
-| + contracts/, no `<AI_KNOWLEDGE_ROOT>/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
-| `<AI_KNOWLEDGE_ROOT>/<feature>/progress.md` exists, tasks remain | `in-loop` | `/pro.resume` |
+| + contracts/, no `<KNOWLEDGE_FEATURES_ROOT>/<feature>/` | `contracts-ready` | `/pro.pickup <feature>` |
+| `<KNOWLEDGE_FEATURES_ROOT>/<feature>/progress.md` exists, tasks remain | `in-loop` | `/pro.resume` |
 | All `[x]` in tasks.md | `complete` | (none — done) |
 
 Render:

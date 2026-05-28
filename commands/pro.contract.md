@@ -46,14 +46,26 @@ If there are no phase sections, take the first ≤5 incomplete tasks as the spri
 To write meaningful acceptance criteria, read:
 - `<SPEC_DIR>/spec.md` — user stories and business requirements
 - `<SPEC_DIR>/plan.md` — technical architecture decisions
+- **`.knowledge/`** (when present at `<PROJECT_ROOT>/.knowledge/`):
+  - `domain/invariants.md` — any CRITICAL row in the contract must not contradict these rules
+  - `domain/glossary.md` — use business terms consistently in Expected Behavior cells
+  - `architecture.md` — sections that match the sprint scope (grep sprint nouns in headings)
+
+When `knowledge.enabled: true`, `/pro.go` and `/pro.pickup` run `/pro.knowledge-sync --mode prime` before this command. If you are invoked standalone, run prime first:
+
+```
+EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<feature name + sprint scope>"
+```
+
+Keep `<pro-knowledge-prime>` in context while writing the contract.
 
 If these files are large (>3000 words), only read the sections relevant to the sprint scope.
 
 ### 4. Generate the contract
 
-Write the contract to `<AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md` where N is the next sprint number (count existing contracts + 1).
+Write the contract to `<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md` where N is the next sprint number (count existing contracts + 1).
 
-Derive `<AI_KNOWLEDGE_DIR>` as: `$(git rev-parse --show-toplevel)/.ai-knowledge/<feature-name>`. Create the directory if it doesn't exist: `mkdir -p "$AI_KNOWLEDGE_DIR/contracts"`.
+Derive `<FEATURE_KNOWLEDGE_DIR>` as: `$(git rev-parse --show-toplevel)/.knowledge/features/<feature-name>`. Create the directory if it doesn't exist: `mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts"`.
 
 Contract structure:
 
@@ -155,7 +167,7 @@ This sprint is DONE when:
 
 ### 5. Create sprint pointer
 
-Write/update `<AI_KNOWLEDGE_DIR>/contracts/current.md` with a single line pointing to the latest contract:
+Write/update `<FEATURE_KNOWLEDGE_DIR>/contracts/current.md` with a single line pointing to the latest contract:
 
 ```
 sprint-<N>
@@ -202,7 +214,7 @@ Print a summary:
 ║  Sprint: <N>                                              ║
 ║  Scope:  <phase name>                                     ║
 ║  Tasks:  <N tasks in scope>                               ║
-║  File:   <AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md          ║
+║  File:   <FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md          ║
 ╚═══════════════════════════════════════════════════════════╝
 
 CRITICAL criteria: <N>
@@ -210,5 +222,5 @@ MEDIUM criteria:   <N>
 LOW criteria:      <N>
 
 The evaluator will grade the next sprint against these criteria.
-Review: <AI_KNOWLEDGE_DIR>/contracts/sprint-<N>.md
+Review: <FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md
 ```

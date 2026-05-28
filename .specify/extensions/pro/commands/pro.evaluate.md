@@ -23,15 +23,15 @@ Parse from `$ARGUMENTS`:
 | `sprint` | yes | Sprint/iteration number being evaluated |
 | `contract` | yes | Path to sprint contract file |
 | `tasks` | yes | Path to tasks.md |
-| `ai-knowledge-dir` | no | Absolute path to `.ai-knowledge/<feature>` dir (default: derived from git root) |
+| `knowledge-feature-dir` | no | Absolute path to `.knowledge/features/<feature>` dir (default: derived from git root) |
 
-Derive `<ai-knowledge-dir>` the same way as the loop: `$(git rev-parse --show-toplevel)/.ai-knowledge/<feature>`.
+Derive `<knowledge-feature-dir>` the same way as the loop: `$(git rev-parse --show-toplevel)/.knowledge/features/<feature>`.
 
 ## Evaluation Steps
 
 ### Step 1 — Calibrate Against Past Evaluations
 
-Before scoring anything, read all files in `<ai-knowledge-dir>/evaluations/` (sorted oldest → newest). Look for:
+Before scoring anything, read all files in `<knowledge-feature-dir>/evaluations/` (sorted oldest → newest). Look for:
 - **Score drift**: are scores trending too high/low across sprints?
 - **Recurring failures**: issues the generator keeps reintroducing (log these as higher severity this sprint)
 - **Resolved issues**: things previously flagged that are now genuinely fixed
@@ -44,14 +44,14 @@ If **`<FEATURE_DIR>/pro-drift.md`** exists (from `/speckit.pro.reconcile`), read
 
 ### Step 2 — Load the Sprint Contract
 
-Read `<ai-knowledge-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
+Read `<knowledge-feature-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
 
 ### Step 3 — Live Browser Testing (if applicable)
 
-If `<ai-knowledge-dir>/init.sh` exists and the contract includes UI or API criteria, run the app and test it live:
+If `<knowledge-feature-dir>/init.sh` exists and the contract includes UI or API criteria, run the app and test it live:
 
 ```bash
-bash <ai-knowledge-dir>/init.sh   # start the dev server
+bash <knowledge-feature-dir>/init.sh   # start the dev server
 ```
 
 Then use the **agent-browser skill** (`.agents/skills/agent-browser/SKILL.md`) to exercise the running application as a real user would:
@@ -77,7 +77,7 @@ Read the actual code files changed this sprint (check `git diff HEAD~1` or the h
 
 ### Step 5 — Write Evaluation & Verdict
 
-Write evaluation to `<ai-knowledge-dir>/evaluations/sprint-<N>.md`.
+Write evaluation to `<knowledge-feature-dir>/evaluations/sprint-<N>.md`.
 Apply the four severity tiers: CRITICAL / MEDIUM / LOW / INFO.
 Output `<pro-eval>VERDICT:details</pro-eval>` as final line.
 

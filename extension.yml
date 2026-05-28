@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.13"
+  version: "1.19"
   description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts with edge-case matrix + browser-test rows, replayable agent-browser test scripts with regression carry-forward, stub/no-op auto-fail gate, branch-symmetry enforcement, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery + edge-case depth checklist, context resets, AGENT.md self-update, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, pickup-existing-feature workflow, local Ollama sidecar (prep/materialize/first-pass review) with evidence-pack discipline so Claude becomes a premium worker not the whole factory"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
@@ -44,7 +44,11 @@ provides:
 
     - name: speckit.pro.knowledge-sync
       file: commands/pro.knowledge-sync.md
-      description: "Repo-level knowledge-base sync — primes new specs with `.repo-knowledge/` context (before_specify) and reconciles claims vs code after evaluator PASS (after_implement). Writes pro-knowledge.md proposals; never silently mutates the knowledge base"
+      description: "Repo-level knowledge-base sync — primes new specs with `.knowledge/` context (before_specify) and reconciles claims vs code after evaluator PASS (after_implement). Writes pro-knowledge.md proposals; never silently mutates the knowledge base"
+
+    - name: speckit.pro.knowledge-migrate
+      file: commands/pro.knowledge-migrate.md
+      description: "One-shot migration from legacy .repo-knowledge/ + .ai-knowledge/ to unified .knowledge/ — moves files, updates .gitignore and pro-config, writes MIGRATION-REPORT.md"
 
     - name: speckit.pro.deepen
       file: commands/pro.deepen.md
@@ -87,7 +91,7 @@ provides:
 
     - name: speckit.pro.local-metrics
       file: commands/pro.local-metrics.md
-      description: "Read-only dashboard of local-model performance (latency, failure rate) and first-pass review quality (precision, recall) aggregated from .ai-knowledge/local-metrics.jsonl. Pure Python; never calls Claude or Ollama."
+      description: "Read-only dashboard of local-model performance (latency, failure rate) and first-pass review quality (precision, recall) aggregated from .knowledge/metrics/local-metrics.jsonl. Pure Python; never calls Claude or Ollama."
 
   config:
     - name: "pro-config.yml"
@@ -105,8 +109,8 @@ hooks:
     command: speckit.pro.knowledge-sync
     args: "--mode prime"
     optional: true
-    prompt: "Prime the agent with repo-level context from .repo-knowledge/ before writing the spec?"
-    description: "Retrieval-only knowledge prime — grounds the agent in existing domain/architecture so it doesn't reinvent terms or duplicate bounded contexts. No-op if .repo-knowledge/ does not exist."
+    prompt: "Prime the agent with repo-level context from .knowledge/ before writing the spec?"
+    description: "Retrieval-only knowledge prime — grounds the agent in existing domain/architecture. Auto-bootstraps .knowledge/ from templates on first run when knowledge.auto_bootstrap is true."
 
   after_specify:
     command: speckit.pro.deepen
@@ -134,8 +138,11 @@ hooks:
     prompt: "Run Pro evaluator to grade the implementation against the sprint contract?"
     description: "Strict QA review — separate evaluator agent eliminates self-praise bias (Anthropic harness pattern)"
 
-  # Note: additional after_implement entries chain in this order (declared in .specify/extensions.yml):
-  #   git.commit → pro.reconcile → pro.local-review → pro.evaluate → pro.knowledge-sync
+  # Note: additional hooks are declared in .specify/extensions.yml:
+  #   before_plan → pro.knowledge-sync --mode prime (when prime_before_plan)
+  #   before_implement → pro.knowledge-sync --mode prime (when prime_before_implement)
+  #   after_implement chain: git.commit → pro.reconcile → pro.local-review → pro.evaluate → pro.knowledge-sync
+  #   /pro.go Phase 7 mirrors this chain explicitly (do not rely on hooks when running full pipeline in chat)
   # - pro.local-review writes evidence-pack drafts for pro.evaluate to verify (self-skips if local off).
   # - pro.knowledge-sync runs only when pro.evaluate returns PASS, so docs are never updated against
   #   unverified code.
@@ -177,16 +184,21 @@ defaults:
     title_match: true         # Heuristic title-noun match against existing specs
     branch_rename_prompt: true # Prompt to rename branch to detected team convention
   commit:
-    commit_artifacts: false   # Default: keep specs/ and .ai-knowledge/ out of feature commits
-    auto_gitignore: true      # Append .ai-knowledge/ (and conditionally specs/) to .gitignore
+    commit_artifacts: false   # Default: keep specs/ and .knowledge/features/ out of feature commits
+    auto_gitignore: true      # Append .knowledge/features/ + metrics/ (and conditionally specs/) to .gitignore
   knowledge:
-    enabled: false              # Off by default — turn on after curating .repo-knowledge/
-    prime_before_specify: true  # Pull retrieval bundle from .repo-knowledge/ before /speckit.specify
-    prime_before_plan: false    # Re-prime if plan widens scope; default off for cost
-    sync_after_evaluate: true   # Reconcile .repo-knowledge/ against the diff after evaluator PASS
+    enabled: true               # Prime/sync active; set false to disable hooks
+    auto_bootstrap: true        # Seed .knowledge/ from templates when missing
+    prime_before_specify: true
+    prime_before_plan: true
+    prime_before_contract: true
+    prime_before_implement: true
+    prime_each_loop_iteration: true
+    sync_after_evaluate: true
     auto_apply_tier: "additive" # none | additive — never "destructive". Clarifying/breaking always proposal-only.
     sync_writes_to: "pro-knowledge.md"  # Per-feature review file, same pattern as pro-drift.md
-    root_dir: ".repo-knowledge" # Versioned, committed. Distinct from .ai-knowledge/ (workspace-only).
+    root_dir: ".knowledge"
+    features_subdir: "features"
   deepen:
     enabled: false               # Opt-in: front-loads rigor at the cost of operator time upfront
     run_after_specify: true      # Fire deepen between specify and clarify
@@ -194,8 +206,8 @@ defaults:
     per_source_budget_seconds: 30
     max_questions: 10            # Cap questions written to spec-questions.md
     sources:
-      repo_knowledge: true       # .repo-knowledge/ (if present)
-      code: true                 # local codebase via repo-ai + grep
+      repo_knowledge: true       # .knowledge/ (if present)
+      code: true                 # local codebase via grep
       sibling_specs: true        # other specs/*/ directories
       git_history: true          # last 90 days of related commits/PRs
       issue_tracker: "auto"      # auto-use any capability-matched tool; "off" to disable
@@ -205,7 +217,7 @@ defaults:
   model: "claude-sonnet-4.6"
   agent_cli: "copilot"
   local_models:
-    enabled: false                       # Opt-in: install Ollama + pull a 7B coder model first
+    enabled: true                        # Default on — self-skips if Ollama unreachable; set false to disable
     base_url: "http://localhost:11434"
     default_model: "qwen2.5-coder:7b"
     fast_model: "llama3.2:3b"
@@ -228,4 +240,4 @@ defaults:
       before_implement: false
       before_evaluate: true
     telemetry: true                                    # write one JSONL line per ollama-md.py call
-    metrics_file: ".ai-knowledge/local-metrics.jsonl"  # relative paths resolve against project root
+    metrics_file: ".knowledge/metrics/local-metrics.jsonl"  # relative paths resolve against project root

@@ -113,11 +113,11 @@ fi
 } > "$TEST_FILES"
 
 # ── Gather contract + supporting artifacts ───────────────────────────────────
-AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/$(basename "$SPEC_DIR")"
-LATEST_CONTRACT="$(ls -1t "$AI_KNOWLEDGE_DIR/contracts/"sprint-*.md 2>/dev/null | head -n1)"
+FEATURE_KNOWLEDGE_DIR="$PROJECT_ROOT/.knowledge/features/$(basename "$SPEC_DIR")"
+LATEST_CONTRACT="$(ls -1t "$FEATURE_KNOWLEDGE_DIR/contracts/"sprint-*.md 2>/dev/null | head -n1)"
 RISK_REG="$SPEC_DIR/risk-register.md"
 TEST_STRAT="$SPEC_DIR/test-strategy.md"
-SECURITY_KB="$PROJECT_ROOT/.repo-knowledge/security.md"
+SECURITY_KB="$PROJECT_ROOT/.knowledge/security.md"
 
 mkdir -p "$SPEC_DIR/local-reviews"
 

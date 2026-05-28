@@ -28,28 +28,23 @@ This command **does not** silently rewrite specs. It produces a factual drift re
 $ARGUMENTS
 ```
 
-Optional flags (parse if present):
-
-| Flag | Meaning |
-|---|---|
-| `--refresh-repo-ai` | If `repo-ai` CLI is available, run `repo-ai build` once before retrieval queries (slow; refreshes local embeddings) |
-
 ## Prerequisites
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json` from the repo root and parse **`FEATURE_DIR`** (absolute path to the active feature spec directory).
 
 2. Verify **`FEATURE_DIR`** contains at least `spec.md` (and ideally `plan.md`, `tasks.md`).
 
-## Retrieval (optional but recommended)
-
-If the repository includes **`repo-ai`** (`repo-ai/package.json` or global `repo-ai` on `PATH`) and the index exists (**`repo-ai/vectordb/index.json`**):
-
-- Run **`repo-ai search`** with 2–4 short queries derived from the feature title and top user stories (see `.agents/skills/repo-ai-cli/SKILL.md`).
-- Use hits only as **navigation hints** — still open primary sources (`spec.md`, source files).
-
-If no index exists and `--refresh-repo-ai` was **not** passed, skip retrieval (do not block).
-
 ## Drift Analysis
+
+### 0. Load `.knowledge/` (when present)
+
+If **`<PROJECT_ROOT>/.knowledge/`** exists, read before comparing spec to code:
+
+- `domain/invariants.md`
+- `architecture.md` sections whose headings match nouns from the feature title or P1 user stories
+- Any `decisions/ADR-*.md` referenced from `INDEX.md` for the same nouns
+
+When implementation **contradicts** an invariant or accepted ADR, add a **DRIFT** row with evidence `invariant:…` or `adr:…` even if `spec.md` is silent — the knowledge base is part of the living spec.
 
 ### 1. Implementation surface
 
@@ -76,7 +71,7 @@ Cross-check **`tasks.md`** completed items: ensure done tasks are actually refle
 
 ### 3. Sprint contract
 
-If **`<FEATURE_DIR>/contracts/`** or **`.ai-knowledge/<feature>/contracts/`** exists, note whether any **acceptance criterion** may be obsolete given DRIFT items (do not delete contract files here — flag only).
+If **`<FEATURE_DIR>/contracts/`** or **`.knowledge/features/<feature>/contracts/`** exists, note whether any **acceptance criterion** may be obsolete given DRIFT items (do not delete contract files here — flag only).
 
 ## Output
 
@@ -104,10 +99,6 @@ Write **`FEATURE_DIR/pro-drift.md`** (overwrite each run):
 
 - [ ] **If DRIFT > 0:** Run `/speckit.clarify` or targeted `/speckit.specify` update; or edit `spec.md` / `plan.md` manually.
 - [ ] **Before merge:** Ensure `/speckit.pro.evaluate` considers drift rows marked DRIFT.
-
-## Retrieval notes (optional)
-
-Brief bullets if `repo-ai search` was used (queries + top paths).
 
 ```
 

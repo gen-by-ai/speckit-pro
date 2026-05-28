@@ -1,19 +1,20 @@
 ---
-description: "Repo-level knowledge-base renewal — primes new specs with relevant domain/architecture context, and reconciles `.repo-knowledge/` against code changes after a passing sprint"
+description: "Repo-level knowledge-base renewal — primes new specs with relevant domain/architecture context, and reconciles `.knowledge/` against code changes after a passing sprint"
 ---
 
 # SpecKit Pro — Knowledge Base Sync (`pro.knowledge-sync`)
 
-Maintains a curated, repo-level Markdown knowledge base (`.repo-knowledge/`) that captures **business domain, architecture, decisions, and bounded contexts** — facts that don't live in any single feature spec and that the loop otherwise has to rediscover every iteration.
+Maintains the unified **`.knowledge/`** tree: shared team docs at the repo root (commit to git) plus per-feature workspace under **`features/<slug>/`** (gitignored). Captures domain language, architecture, invariants, and autonomous-run state the loop would otherwise rediscover every iteration.
 
 This command has two modes, intended for two hook points:
 
 | Mode | When it fires | What it does |
 |---|---|---|
-| `prime` (read) | `before_specify`, top of `/pro.go`, top of `/pro.pickup` | Retrieves the top-k `.repo-knowledge/` chunks relevant to the feature, surfaces them to the next agent before the spec is written |
-| `sync` (write) | `after_implement`, **only after evaluator PASS** | Diffs the sprint's code changes against claims in `.repo-knowledge/`, writes proposed updates to `<FEATURE_DIR>/pro-knowledge.md` for human review |
+| `prime` (read) | `before_specify`, `before_plan`, `before_implement`, top of `/pro.go`, `/pro.pickup`, each `/pro.loop` iteration | Retrieves relevant `.knowledge/` chunks and surfaces a `<pro-knowledge-prime>` block |
+| `sync` (write) | `after_implement`, **only after evaluator PASS** | Diffs the sprint's code changes against claims in `.knowledge/`, writes proposed updates to `<FEATURE_DIR>/pro-knowledge.md` for human review |
+| `bootstrap` (seed) | First run when `.knowledge/` is missing and `knowledge.auto_bootstrap: true` | Copies starter templates into `.knowledge/` (does not overwrite existing files) |
 
-`pro.knowledge-sync` **never** silently mutates `.repo-knowledge/`. All write-side output is a per-feature review file (mirrors the `pro-drift.md` pattern from `/pro.reconcile`).
+`pro.knowledge-sync` **never** silently mutates `.knowledge/`. All write-side output is a per-feature review file (mirrors the `pro-drift.md` pattern from `/pro.reconcile`).
 
 ## User Input
 
@@ -25,22 +26,38 @@ Parse from `$ARGUMENTS`:
 
 | Argument | Required | Default | Meaning |
 |---|---|---|---|
-| `--mode` | no | `sync` | `sync` \| `prime` |
+| `--mode` | no | `sync` | `sync` \| `prime` \| `bootstrap` |
 | `--feature` | no | derived from `check-prerequisites.sh` | Feature dir name |
 | `--query` | no | derived (prime only) | Override the retrieval query string |
 | `--auto-apply` | no | from config | `none` \| `additive` — what classes of edit may auto-merge (never `destructive`) |
-| `--refresh-repo-ai` | no | off | Rebuild `repo-ai` index before retrieval (slow; only if it exists) |
 
 ## Prerequisites
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json` from the repo root and parse **`FEATURE_DIR`**.
 2. Derive **`PROJECT_ROOT`** = `git rev-parse --show-toplevel`.
-3. **`KNOWLEDGE_DIR`** = `<PROJECT_ROOT>/.repo-knowledge` (note: **versioned**, unlike `.ai-knowledge/`).
-4. If `KNOWLEDGE_DIR` does not exist, print:
+3. **`KNOWLEDGE_DIR`** = `<PROJECT_ROOT>/<knowledge.root_dir>` (default `.knowledge`). Shared files (`INDEX.md`, `domain/`, …) live here and are **versioned**. Legacy: if `INDEX.md` is missing but `.repo-knowledge/INDEX.md` exists, use `.repo-knowledge` and print: run `/speckit.pro.knowledge-migrate`.
+4. **`FEATURE_KNOWLEDGE_DIR`** = `<KNOWLEDGE_DIR>/<knowledge.features_subdir>/<feature>` (default `features/`). Legacy: `.ai-knowledge/<feature>` if the new path does not exist yet.
+5. If `KNOWLEDGE_DIR` does not exist:
+   - **`--mode bootstrap`**, or **`knowledge.auto_bootstrap: true`** with `knowledge.enabled: true` → run [Mode: bootstrap](#mode-bootstrap-seed-starter-tree) below, then continue if the invoked mode was `prime` or `sync`.
+   - Otherwise print `[Pro] No .knowledge/ found — skipping (run /pro.knowledge-migrate, /pro.knowledge-sync --mode bootstrap, or set knowledge.auto_bootstrap: true).` and exit 0.
+6. If `knowledge.enabled: false` in `pro-config.yml` and `--mode` is not `bootstrap`, exit 0 with `[Pro] knowledge.enabled is false — skipping.`
+
+## Mode: bootstrap (seed starter tree)
+
+Creates `.knowledge/` from extension templates when the directory is missing or sparse. **Never overwrites** an existing file.
+
+1. Resolve template root (first match):
+   - `<PROJECT_ROOT>/.specify/extensions/pro/templates/knowledge/`
+   - `<PROJECT_ROOT>/templates/knowledge/` (when developing SpecKit Pro itself)
+   - Legacy: `templates/repo-knowledge/` (same layout)
+2. Copy each file into **`KNOWLEDGE_DIR`** root preserving relative paths (`INDEX.md`, `architecture.md`, `domain/*.md`, `decisions/README.md`). **Do not** copy into `features/` or `metrics/`.
+3. `mkdir -p` for `domain/`, `decisions/`, `runbooks/`, `features/`, `metrics/`.
+4. If `runbooks/` is empty, add `runbooks/README.md` with one line: `End-to-end traces go here (request → handlers → DB → side effects).`
+5. Print:
    ```
-   [Pro] No .repo-knowledge/ found — skipping (run /pro.knowledge-sync --mode bootstrap to seed one, or create it by hand).
+   [Pro] Bootstrapped .knowledge/ from templates — edit INDEX.md and domain/invariants.md before relying on primes.
    ```
-   Exit 0. This makes the command safe to wire as a hook before the operator has chosen to adopt the pattern.
+6. Exit 0 unless the caller also requested `prime` or `sync` in the same invocation (then continue into that mode).
 
 ## Mode: `prime` (read-only retrieval)
 
@@ -54,20 +71,21 @@ Order of preference for the query string:
 2. `$ARGUMENTS` minus the flag arguments (typical for `/pro.go <description>`).
 3. Concatenation of `spec.md` H1 + first user story title (when called after specify).
 
-Keep the query under ~200 chars — short, distinctive nouns and verbs work better than full sentences for embedding retrieval.
+Keep the query under ~200 chars — short, distinctive nouns and verbs work better for keyword matching.
 
-### 2. Retrieve from `.repo-knowledge/` via `repo-ai`
+### 2. Retrieve from `.knowledge/` (grep + link follow)
 
-If `repo-ai/vectordb/index.json` exists:
-
-```bash
-repo-ai search "<query>" --top-k 8 --root .repo-knowledge
-```
-
-If `repo-ai` is not installed but `KNOWLEDGE_DIR/INDEX.md` exists, fall back to a deterministic two-stage scan:
+If `KNOWLEDGE_DIR/INDEX.md` exists, run a deterministic two-stage scan:
 
 1. `grep -n -i "<each query keyword>"` over `KNOWLEDGE_DIR/INDEX.md` to find decision-tree entries.
 2. For each matched entry, follow the relative links and read the linked files (max 5 files, max 200 lines each).
+
+If `INDEX.md` is missing, grep the top-level `.knowledge/*.md` files for the same keywords (max 5 files, max 200 lines each).
+
+**Always include** (if present, max 120 lines each — these are small and high-signal):
+- `domain/invariants.md`
+- `domain/glossary.md`
+- The `architecture.md` section whose heading best matches a query keyword
 
 ### 3. Emit a prime block
 
@@ -75,7 +93,7 @@ Print to stdout (this is what the next agent will see in context):
 
 ```markdown
 <pro-knowledge-prime>
-Retrieved <N> chunks from .repo-knowledge/ relevant to: "<query>"
+Retrieved <N> chunks from .knowledge/ relevant to: "<query>"
 
 ## Decision-tree entry points
 - INDEX.md → <heading or rule that matched>
@@ -104,11 +122,11 @@ The prime mode does **not** write any files. It is pure retrieval.
 
 ## Mode: `sync` (post-implement renewal)
 
-Purpose: when a sprint successfully passes evaluation, reconcile what was just built against the knowledge base. Propose updates so `.repo-knowledge/` doesn't rot. The operator approves before any edit graduates from `pro-knowledge.md` into the knowledge base.
+Purpose: when a sprint successfully passes evaluation, reconcile what was just built against the knowledge base. Propose updates so `.knowledge/` doesn't rot. The operator approves before any edit graduates from `pro-knowledge.md` into the knowledge base.
 
 ### 1. Guard: only proceed on evaluator PASS
 
-Read the latest evaluation file: `<AI_KNOWLEDGE_DIR>/evaluations/sprint-<N>.md` (highest `N`).
+Read the latest evaluation file: `<FEATURE_KNOWLEDGE_DIR>/evaluations/sprint-<N>.md` (highest `N`).
 
 - No evaluations dir or no files → print `[Pro] No evaluations found — skipping knowledge-sync (sync runs only after a passing sprint).` and exit 0.
 - Final line matches `<pro-eval>NEEDS_REVISION:` or `<pro-eval>FAIL:` → print `[Pro] Last sprint did not pass — skipping knowledge-sync to avoid recording unverified code into the knowledge base.` and exit 0.
@@ -123,16 +141,16 @@ git diff --name-only HEAD~1   # or the full sprint range if multi-commit
 git diff --stat HEAD~1
 ```
 
-Build a list of changed files. Short-circuit if the change set touches **only** test files, fixtures, comments, or paths none of `.repo-knowledge/` references:
+Build a list of changed files. Short-circuit if the change set touches **only** test files, fixtures, comments, or paths none of `.knowledge/` references:
 
-- Quick check: grep `.repo-knowledge/` for each changed file's basename and parent directory.
+- Quick check: grep `.knowledge/` for each changed file's basename and parent directory.
 - Zero hits across all changed files → print `[Pro] No knowledge-relevant changes detected — skipping (only tests/fixtures touched).` and exit 0.
 
 This short-circuit is the single most important cost control. Most sprints don't move the knowledge needle.
 
 ### 3. Classify the diff into proposal tiers
 
-For each changed file, classify against `.repo-knowledge/` claims and propose updates. Use **three tiers**:
+For each changed file, classify against `.knowledge/` claims and propose updates. Use **three tiers**:
 
 | Tier | Examples | Auto-apply policy |
 |---|---|---|
@@ -184,13 +202,13 @@ Write to `<FEATURE_DIR>/pro-knowledge.md` (overwrite each run):
 ## Recommended follow-ups
 
 - [ ] **If breaking proposals > 0:** Resolve before merging the feature branch.
-- [ ] **If clarifying proposals > 0:** Edit `.repo-knowledge/` files to incorporate the suggested patches, then delete this file.
-- [ ] **If only auto-applied:** Review the auto-edits in `git diff .repo-knowledge/`; commit or revert as a single follow-up commit.
+- [ ] **If clarifying proposals > 0:** Edit `.knowledge/` files to incorporate the suggested patches, then delete this file.
+- [ ] **If only auto-applied:** Review the auto-edits in `git diff .knowledge/`; commit or revert as a single follow-up commit.
 
 ## Retrieval notes
 
-- Queried `repo-ai` with: "<query>"
-- Top hits considered: <list of (file, score)>
+- Query keywords: <list>
+- Files read: <list of paths from INDEX.md link follow>
 ```
 
 ### 5. Apply additive edits (if policy allows)
@@ -198,7 +216,7 @@ Write to `<FEATURE_DIR>/pro-knowledge.md` (overwrite each run):
 If `--auto-apply additive` (or config `knowledge.auto_apply_tier: additive`):
 
 - Apply only the proposals tagged `Additive — auto-applied`.
-- Edit `.repo-knowledge/` files in place.
+- Edit `.knowledge/` files in place.
 - **Do not commit.** Leave the edits staged in the working tree for the operator's next checkpoint commit to pick up. (Same scope-of-autonomy stance as the rest of the loop: never push, never make irreversible changes alone.)
 
 If policy is `none`, every proposal goes into the review file unchanged.
@@ -226,7 +244,7 @@ Date: <ISO timestamp>
 - <existing ADR if applicable>
 ```
 
-This is a **draft**, not a real ADR. It graduates to `.repo-knowledge/decisions/ADR-NNNN-*.md` only when a human moves and edits it. The point is to make the cost of recording a decision lower than the cost of ignoring it.
+This is a **draft**, not a real ADR. It graduates to `.knowledge/decisions/ADR-NNNN-*.md` only when a human moves and edits it. The point is to make the cost of recording a decision lower than the cost of ignoring it.
 
 ## Output Protocol
 
@@ -248,29 +266,30 @@ If `<FEATURE_DIR>` cannot be resolved (sync mode only):
 
 | Hook | Mode | Position | Skip conditions |
 |---|---|---|---|
-| `before_specify` | `prime` | First step of `/pro.go` and `/pro.pickup`, before any spec generation | `KNOWLEDGE_DIR` missing |
-| `after_implement` | `sync` | Last step in the after_implement chain (after `pro.evaluate`) | Evaluator did not PASS; only tests/fixtures changed; `KNOWLEDGE_DIR` missing |
+| `/pro.go` Phase 0 | `prime` | Pipeline start | `prime_before_specify: false` |
+| `/pro.go` Phase 2.5 | `prime` | Before plan | `prime_before_plan: false` |
+| `/pro.go` Phase 4 | `prime` | After tasks, before contract | `prime_before_contract: false` |
+| `/pro.go` Phase 5a | `prime` | Before implement loop | `prime_before_implement: false` |
+| `/pro.go` Phase 6 | `prime` | Each loop iteration | `prime_each_loop_iteration: false` |
+| `/pro.go` Phase 7d | `sync` | After `pro.evaluate` PASS | `sync_after_evaluate: false` |
+| Hooks (`before_specify`, etc.) | `prime`/`sync` | Native SpecKit phases when not using `/pro.go` | Same skip flags |
+| `/pro.pickup` | `prime` + Phase 7 `sync` | Pickup entry and post-loop | Same as `/pro.go` |
 
 ## Why this exists
 
 Specs describe **one feature**. `AGENT.md` describes **how to run the project**. Neither captures the layer above: *what does the business mean by "policy", which bounded contexts own writes to `customer`, what invariants must never break*. Without that layer, every new feature rediscovers the domain from code — slowly, and often wrong.
 
-`.repo-knowledge/` is that layer. This command keeps it from rotting. It is **disabled by default** (see `knowledge.enabled` in `pro-config.yml`) — turn it on only after running `/pro.knowledge-sync --mode bootstrap` (or hand-writing an initial `.repo-knowledge/INDEX.md`) and reviewing the seed content. An auto-generated knowledge base that nobody curates is worse than no knowledge base, because the loop will trust its own slop.
+`.knowledge/` is that layer. This command keeps it from rotting. **`knowledge.enabled` defaults to `true`** — on first run, `auto_bootstrap` seeds a starter tree you should edit (especially `INDEX.md` and `domain/invariants.md`). Treat auto-seeded placeholders as scaffolding, not ground truth, until a human replaces them.
 
-## Expected `.repo-knowledge/` layout
+## Expected `.knowledge/` layout
 
 ```
-.repo-knowledge/                # versioned, committed
-├── INDEX.md                    # decision tree: "if touching X, read Y, then Z"
-├── architecture.md             # systems map + entry points per area
-├── domain/
-│   ├── glossary.md             # business terms, not code terms
-│   ├── <bounded-context>.md    # one per business capability
-│   └── invariants.md           # rules that must never break
-├── decisions/
-│   └── ADR-NNNN-*.md           # accepted decisions, append-only history
-└── runbooks/
-    └── <flow>.md               # end-to-end traces
+.knowledge/
+├── INDEX.md, architecture.md, domain/, decisions/, runbooks/   # COMMIT (team truth)
+├── features/<slug>/          # GITIGNORE — AGENT.md, contracts/, progress.md, init.sh
+└── metrics/local-metrics.jsonl
 ```
+
+Legacy: `.repo-knowledge/` + `.ai-knowledge/<slug>/` — still read if not migrated. Run **`/speckit.pro.knowledge-migrate`** once to move everything into `.knowledge/`.
 
 `INDEX.md` is the decision tree, not a TOC. Each entry should be in the form **"if you are touching X, read Y, then Z"** — the loop traverses it like a router during `prime`.

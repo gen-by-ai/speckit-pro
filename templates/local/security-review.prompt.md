@@ -1,7 +1,7 @@
 # security-review.md — local-model prompt
 
 You will read the supplied CONTEXT (sprint contract, diff, modified files,
-risk-register.md, optional .repo-knowledge security.md) and produce a
+risk-register.md, optional .knowledge security.md) and produce a
 **first-pass security review**.
 
 This review is a screening pass. A stronger model (and ideally a human)

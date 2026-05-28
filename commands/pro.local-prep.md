@@ -82,7 +82,7 @@ The driver:
 1. Builds a shallow file-tree snapshot (≤ 500 paths via `git ls-files`) — grounds `repo-map.md` so the model doesn't hallucinate paths.
 2. Generates `repo-map.md` first (cheap; downstream artifacts feed on it).
 3. Generates `risk-register.md`, `test-strategy.md`, `open-questions.md` in parallel-safe order (serial by default — concurrency 1 per dev.md guidance for Pi-class hardware).
-4. Compiles `context-pack.md` last, fed by everything above plus `.repo-knowledge/INDEX.md` if present.
+4. Compiles `context-pack.md` last, fed by everything above plus `.knowledge/INDEX.md` if present.
 
 ### 5. Reading the output
 

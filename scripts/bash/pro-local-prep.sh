@@ -2,7 +2,7 @@
 # =============================================================================
 # pro-local-prep.sh — Run local Ollama workers to generate prep artifacts
 #
-# Inputs:  <SPEC_DIR>/spec.md, plan.md, tasks.md (+ optional .repo-knowledge)
+# Inputs:  <SPEC_DIR>/spec.md, plan.md, tasks.md (+ optional .knowledge)
 # Outputs: <SPEC_DIR>/{repo-map.md, context-pack.md, risk-register.md,
 #                       test-strategy.md, open-questions.md}
 #
@@ -100,7 +100,7 @@ if [[ ! -f "$SPEC_MD" ]]; then
 fi
 
 REPO_KNOWLEDGE_INDEX=""
-[[ -f "$PROJECT_ROOT/.repo-knowledge/INDEX.md" ]] && REPO_KNOWLEDGE_INDEX="$PROJECT_ROOT/.repo-knowledge/INDEX.md"
+[[ -f "$PROJECT_ROOT/.knowledge/INDEX.md" ]] && REPO_KNOWLEDGE_INDEX="$PROJECT_ROOT/.knowledge/INDEX.md"
 
 # Generate a shallow file-tree snapshot for grounding repo-map.md.
 TREE_SNAPSHOT="$(mktemp -t pro-tree.XXXXXX).md"
