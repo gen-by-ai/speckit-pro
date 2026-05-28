@@ -30,7 +30,7 @@ RESUME=false
 FEATURE_NAME=""
 TASKS_PATH=""
 SPEC_DIR=""
-AI_KNOWLEDGE_DIR=""  # derived after arg parsing if not provided
+FEATURE_KNOWLEDGE_DIR=""  # derived after arg parsing if not provided
 
 # Effort levels per phase (Opus 4.7+ adaptive thinking)
 EFFORT_PLANNING="xhigh"
@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
     --feature-name)     FEATURE_NAME="$2";     shift 2 ;;
     --tasks-path)       TASKS_PATH="$2";       shift 2 ;;
     --spec-dir)         SPEC_DIR="$2";         shift 2 ;;
-    --ai-knowledge-dir) AI_KNOWLEDGE_DIR="$2"; shift 2 ;;
+    --knowledge-feature-dir) FEATURE_KNOWLEDGE_DIR="$2"; shift 2 ;;
     --max-iterations)   MAX_ITERATIONS="$2";   shift 2 ;;
     --checkpoint-frequency) CHECKPOINT_FREQUENCY="$2"; shift 2 ;;
     --model)            MODEL="$2";            shift 2 ;;
@@ -76,12 +76,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ─── Derive AI_KNOWLEDGE_DIR ──────────────────────────────────────────────
-if [[ -z "$AI_KNOWLEDGE_DIR" ]]; then
+# ─── Derive FEATURE_KNOWLEDGE_DIR ──────────────────────────────────────────────
+if [[ -z "$FEATURE_KNOWLEDGE_DIR" ]]; then
   PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  AI_KNOWLEDGE_DIR="$PROJECT_ROOT/.ai-knowledge/$FEATURE_NAME"
+  FEATURE_KNOWLEDGE_DIR="$PROJECT_ROOT/.knowledge/features/$FEATURE_NAME"
 fi
-mkdir -p "$AI_KNOWLEDGE_DIR/contracts" "$AI_KNOWLEDGE_DIR/evaluations"
+mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts" "$FEATURE_KNOWLEDGE_DIR/evaluations"
 
 # ─── Export Sub-Agent Model (when configured) ─────────────────────────────
 # Allows specialist sub-agents to run on a lighter model while the orchestrator
@@ -110,7 +110,7 @@ if [[ ! -f "$TASKS_PATH" ]]; then
 fi
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-PROGRESS_FILE="$AI_KNOWLEDGE_DIR/progress.md"  # persistent audit trail
+PROGRESS_FILE="$FEATURE_KNOWLEDGE_DIR/progress.md"  # persistent audit trail
 SESSION_FILE="$SPEC_DIR/session.md"             # transient pipeline state
 CONTEXT_SUMMARY="$SPEC_DIR/context-summary.md"
 
@@ -559,6 +559,10 @@ main() {
 
     checkpoint_commit "implementation-complete" "$final_completed" "$final_total"
     update_session "implement" "completed" "All $final_total tasks complete in $((iteration - 1)) iterations"
+    echo ""
+    log_info "Next (chat pipeline): run pro.go Phase 7 in the agent —"
+    log_info "  /speckit.pro.reconcile → /speckit.pro.local-review → /speckit.pro.evaluate → /speckit.pro.knowledge-sync (sync on PASS)"
+    log_info "Hooks may also fire this chain on native /speckit.implement; /pro.go must not rely on hooks alone."
     exit 0
   else
     local remaining=$(( final_total - final_completed ))

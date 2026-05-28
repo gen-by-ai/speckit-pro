@@ -23,15 +23,15 @@ Parse from `$ARGUMENTS`:
 | `sprint` | yes | Sprint/iteration number being evaluated |
 | `contract` | yes | Path to sprint contract file |
 | `tasks` | yes | Path to tasks.md |
-| `ai-knowledge-dir` | no | Absolute path to `.ai-knowledge/<feature>` dir (default: derived from git root) |
+| `knowledge-feature-dir` | no | Absolute path to `.knowledge/features/<feature>` dir (default: derived from git root) |
 
-Derive `<ai-knowledge-dir>` the same way as the loop: `$(git rev-parse --show-toplevel)/.ai-knowledge/<feature>`.
+Derive `<knowledge-feature-dir>` the same way as the loop: `$(git rev-parse --show-toplevel)/.knowledge/features/<feature>`.
 
 ## Evaluation Steps
 
 ### Step 1 — Calibrate Against Past Evaluations
 
-Before scoring anything, read all files in `<ai-knowledge-dir>/evaluations/` (sorted oldest → newest). Look for:
+Before scoring anything, read all files in `<knowledge-feature-dir>/evaluations/` (sorted oldest → newest). Look for:
 - **Score drift**: are scores trending too high/low across sprints?
 - **Recurring failures**: issues the generator keeps reintroducing (log these as higher severity this sprint)
 - **Resolved issues**: things previously flagged that are now genuinely fixed
@@ -42,16 +42,24 @@ Use this to set your scoring bar. If Sprint 1 scored 72 and Sprint 2 scored 91 w
 
 If **`<FEATURE_DIR>/pro-drift.md`** exists (from `/speckit.pro.reconcile`), read the **DRIFT** rows before scoring. Known document-vs-code mismatch **without** an updated spec or contract should normally **cap** the verdict below PASS unless the drift is explicitly acceptable (document why in the evaluation). Treat reconcile output as context, not a substitute for contract criteria.
 
+### Step 1c — Check repo invariants (if present)
+
+If **`<PROJECT_ROOT>/.knowledge/domain/invariants.md`** exists, read it (and any bounded-context files linked from `INDEX.md` for paths touched this sprint).
+
+- Any **clear violation** of a stated invariant → at least one CRITICAL failure row in the evaluation and verdict capped at **NEEDS_REVISION** (or **FAIL** if the violation is in production paths).
+- Cite evidence as `invariant:<file>:<heading>` in the evaluation prose.
+- If `<FEATURE_DIR>/pro-knowledge.md` exists from a prior sync, note whether this sprint's changes align with its proposals.
+
 ### Step 2 — Load the Sprint Contract
 
-Read `<ai-knowledge-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
+Read `<knowledge-feature-dir>/contracts/sprint-<N>.md`. The acceptance criteria table is the definitive definition of "done". Every CRITICAL criterion must pass for the sprint to pass.
 
 ### Step 3 — Live Browser Testing (mandatory when contract has Browser Test rows)
 
 Boot the app:
 
 ```bash
-bash <ai-knowledge-dir>/init.sh   # start the dev server
+bash <knowledge-feature-dir>/init.sh   # start the dev server
 ```
 
 If the app fails to start, mark all UI/API rows as FAIL with reason `app-not-startable` and emit `<pro-eval>FAIL:app-not-startable</pro-eval>` — do not proceed to static review. A sprint that broke the app is not graded on code.
@@ -167,7 +175,7 @@ Otherwise:
 1. **Resolve the metrics file path**:
    ```bash
    PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   METRICS_FILE="${SPECKIT_PRO_METRICS_FILE:-$PROJECT_ROOT/.ai-knowledge/local-metrics.jsonl}"
+   METRICS_FILE="${SPECKIT_PRO_METRICS_FILE:-$PROJECT_ROOT/.knowledge/metrics/local-metrics.jsonl}"
    mkdir -p "$(dirname "$METRICS_FILE")"
    ```
 
@@ -212,13 +220,13 @@ Otherwise:
    PY
    ```
 
-5. **Calibration hint**: if you find yourself dropping ≥ 50 % of one review type's findings, that's a signal worth recording in your evaluation prose (`<ai-knowledge-dir>/evaluations/sprint-<N>.md`) — the local model or its prompt template may need tuning. Run `/pro.local-metrics --feature <feature>` afterwards to see the trend.
+5. **Calibration hint**: if you find yourself dropping ≥ 50 % of one review type's findings, that's a signal worth recording in your evaluation prose (`<knowledge-feature-dir>/evaluations/sprint-<N>.md`) — the local model or its prompt template may need tuning. Run `/pro.local-metrics --feature <feature>` afterwards to see the trend.
 
 **Why this step exists**: from `.dev-work/learning.md` (MDASH lesson 4) — "prove the model didn't just memorize the answer". The evaluator is the only authority that can grade the local stack's output. Anything else is self-reporting and drifts.
 
 ### Step 5 — Write Evaluation & Verdict
 
-Write evaluation to `<ai-knowledge-dir>/evaluations/sprint-<N>.md`.
+Write evaluation to `<knowledge-feature-dir>/evaluations/sprint-<N>.md`.
 Apply the four severity tiers: CRITICAL / MEDIUM / LOW / INFO.
 Output `<pro-eval>VERDICT:details</pro-eval>` as final line.
 

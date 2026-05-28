@@ -4,7 +4,7 @@ description: "Dashboard of local-model performance + first-pass review quality. 
 
 # SpecKit Pro — Local Metrics (`pro.local-metrics`)
 
-Reads `.ai-knowledge/local-metrics.jsonl` and prints a compact dashboard of:
+Reads `.knowledge/metrics/local-metrics.jsonl` and prints a compact dashboard of:
 
 - **Performance** — per-task call count, p50/p95 wall-clock latency, failure rate, models used. Bytes in/out (proxy for token usage; multiply by your model's tokenizer ratio for token estimates).
 - **Review quality** — per review type (`implementation-review`, `test-gap-review`, `security-review`):
@@ -31,9 +31,9 @@ File location resolution order:
 1. `--metrics-file <path>` flag
 2. `$SPECKIT_PRO_METRICS_FILE` env
 3. `local_models.metrics_file` in `pro-config.yml` (relative paths resolve against project root)
-4. Default: `<PROJECT_ROOT>/.ai-knowledge/local-metrics.jsonl`
+4. Default: `<PROJECT_ROOT>/.knowledge/metrics/local-metrics.jsonl`
 
-The default lives under `.ai-knowledge/` which is gitignored — metrics are workspace state, not artifacts to commit.
+The default lives under `.knowledge/features/` which is gitignored — metrics are workspace state, not artifacts to commit.
 
 ## User Input
 
@@ -62,7 +62,7 @@ Optional flags:
 
 ```
   SpecKit Pro — local-model metrics (30d window)
-  File: /Users/me/code/app/.ai-knowledge/local-metrics.jsonl
+  File: /Users/me/code/app/.knowledge/metrics/local-metrics.jsonl
 ────────────────────────────────────────────────────────────────────────
   Calls: 142   Failures: 3 (2.1%)   Wall: 51.4 min   Output: 412 KiB
 ────────────────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ Optional flags:
 local_models:
   enabled: true
   telemetry: true                                     # default true; set false to disable JSONL emission
-  metrics_file: ".ai-knowledge/local-metrics.jsonl"  # relative paths resolve against project root
+  metrics_file: ".knowledge/metrics/local-metrics.jsonl"  # relative paths resolve against project root
 ```
 
 ## Roadmap (Layer 2 + 3, opt-in later)

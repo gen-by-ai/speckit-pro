@@ -117,43 +117,50 @@ context:
   #       for long autonomous runs — compaction is lossy; handoffs are precise.
   autocompact_pct_override: ~  # null = use Claude Code default (~83.5%)
 
-# ── Repo-level Knowledge Base ────────────────────────────────────────────────
-# A versioned Markdown knowledge base at <project root>/.repo-knowledge/ that
-# captures domain language, architecture, invariants, and decisions — the layer
-# above per-feature specs and per-feature AGENT.md.
+# ── Knowledge base (.knowledge/) ─────────────────────────────────────────────
+# Single tree: shared files at root (commit to git) + features/<slug>/ (gitignore).
+# Replaces the older .repo-knowledge/ + .ai-knowledge/<feature>/ split.
 #
 # When enabled, /speckit.pro.knowledge-sync runs in two modes:
 #   • prime  — before /speckit.specify, retrieves top-k chunks relevant to the
 #              new feature so the agent doesn't reinvent terms or violate
 #              invariants in the spec it's about to write.
 #   • sync   — after /speckit.pro.evaluate returns PASS, diffs the sprint's
-#              code changes against .repo-knowledge/ claims and writes
+#              code changes against .knowledge/ claims and writes
 #              <FEATURE_DIR>/pro-knowledge.md with proposed updates. Never
 #              silently mutates the knowledge base; the operator approves
 #              before edits graduate.
 #
-# Disabled by default. Turn on only after .repo-knowledge/INDEX.md exists and
-# has been hand-curated for at least one bounded context. An auto-generated
-# knowledge base that nobody reviews is worse than no knowledge base.
+# On by default. First pipeline run can auto-seed .knowledge/ from templates
+# (knowledge.auto_bootstrap). Replace placeholder INDEX/invariants with real rules.
 knowledge:
-  # Master switch. When false, both hooks are no-ops.
-  enabled: false
+  # Master switch. When false, prime/sync hooks are no-ops (bootstrap still works if invoked explicitly).
+  enabled: true
+
+  # Create .knowledge/ from templates when missing (never overwrites existing files).
+  auto_bootstrap: true
 
   # Run pro.knowledge-sync --mode prime as the first step of /pro.go and /pro.pickup.
-  # Cost: ~5–15s extra per pipeline run with a warm repo-ai index. Skip if no .repo-knowledge/.
   prime_before_specify: true
 
-  # Also re-prime before /speckit.plan (useful if the plan widens scope into
-  # bounded contexts the spec didn't anticipate). Default off — most teams
-  # don't need it and the cost adds up.
-  prime_before_plan: false
+  # Re-prime before /speckit.plan — grounds technical planning in domain/architecture context.
+  prime_before_plan: true
+
+  # Re-prime after /speckit.tasks, before /pro.contract (grounds acceptance criteria).
+  prime_before_contract: true
+
+  # Re-prime before /speckit.implement — surfaces invariants before code changes land.
+  prime_before_implement: true
+
+  # Re-prime at the start of each loop iteration in /pro.go and /pro.loop.
+  prime_each_loop_iteration: true
 
   # Run pro.knowledge-sync --mode sync as the last step of after_implement,
   # AFTER pro.evaluate. Self-skips unless the evaluator returned PASS, so
   # docs are never updated against unverified code.
   sync_after_evaluate: true
 
-  # What classes of edit may auto-merge into .repo-knowledge/ when sync runs.
+  # What classes of edit may auto-merge into .knowledge/ when sync runs.
   #   • "none"     — every proposal is review-only; nothing is auto-edited.
   #   • "additive" — only purely additive edits auto-apply (new endpoints in
   #                  architecture.md, new glossary terms). Never destructive.
@@ -165,9 +172,10 @@ knowledge:
   # Where sync writes its review file. Same pattern as pro-drift.md.
   sync_writes_to: "pro-knowledge.md"
 
-  # Directory name (relative to project root) for the knowledge base. This is
-  # VERSIONED in git — distinct from .ai-knowledge/ which is workspace-only.
-  root_dir: ".repo-knowledge"
+  root_dir: ".knowledge"
+
+  # Per-feature workspace (AGENT.md, contracts, progress, init.sh) — never commit.
+  features_subdir: "features"
 
 # ── Spec Deepener ────────────────────────────────────────────────────────────
 # An adversarial spec auditor that runs between /speckit.specify and /speckit.clarify.
@@ -177,7 +185,7 @@ knowledge:
 #
 # Sources are discovered by CAPABILITY, not by name — the command checks the
 # kind of source it needs (issue tracker, docs system, code search) and matches
-# whatever tools are available at run time. Local sources (.repo-knowledge/,
+# whatever tools are available at run time. Local sources (.knowledge/,
 # code, sibling specs, git history) are always attempted; external sources are
 # attempted only if a matching tool is available AND the corresponding
 # sources.<category> is "auto".
@@ -213,8 +221,8 @@ deepen:
   # operates on capability handles (issue-tracker, documentation, …).
   sources:
     # Local — no external dependencies
-    repo_knowledge: true       # Search .repo-knowledge/ (if present)
-    code: true                 # Search the local codebase via repo-ai + grep
+    repo_knowledge: true       # Search .knowledge/ (if present)
+    code: true                 # Search the local codebase via grep
     sibling_specs: true        # grep specs/*/spec.md and plan.md
     git_history: true          # git log over the last 90 days, related paths
 
@@ -273,21 +281,21 @@ checkpoint:
 # Controls what files end up in feature-branch commits. The default is "PR-safe":
 # workspace-only state stays out of commits intended for review.
 commit:
-  # Whether to include specs/ and .ai-knowledge/ in checkpoint commits.
+  # Whether to include specs/ and .knowledge/features/ in checkpoint commits.
   #
   # false (default, recommended):
-  #   - Checkpoints stage code only — never .ai-knowledge/, never specs/
+  #   - Checkpoints stage code only — never .knowledge/features/, never specs/
   #   - tasks.md [ ] → [x] updates are tracked locally but not committed
   #   - PRs review only production code, no SpecKit artifacts
   #   - Avoids the common pain of force-pushing to remove SpecKit artifacts before PR
   #
   # true:
   #   - Checkpoints include specs/ (for teams that version specs intentionally)
-  #   - .ai-knowledge/ is STILL excluded (it's machine-generated workspace state)
+  #   - .knowledge/features/ is STILL excluded (it's machine-generated workspace state)
   #   - Use this if your team wants spec.md, plan.md, tasks.md to live in git history
   commit_artifacts: false
 
-  # Auto-append .ai-knowledge/ (and specs/ when commit_artifacts: false) to .gitignore
+  # Auto-append .knowledge/features/ + .knowledge/metrics/ (and specs/ when commit_artifacts: false) to .gitignore
   # during Phase 5b. Most teams want this; disable if you manage .gitignore manually.
   auto_gitignore: true
 
@@ -307,20 +315,16 @@ pickup:
   branch_rename_prompt: true
 
 # ── Local Models (Ollama sidecar) ─────────────────────────────────────────────
-# Optional offload of token-heavy prep + first-pass review to a local Ollama
-# server. Inspired by .dev-work/dev.md: Claude becomes a premium worker, not
-# the whole factory. Local Markdown drafts are NEVER trusted as final — they
-# get a provenance banner, and the stronger evaluator (Claude / pro.evaluate)
-# verifies before anything ships.
+# Default pattern: offload token-heavy prep + first-pass review to local Ollama.
+# Claude stays the premium worker (spec/plan/implement/evaluate). Local drafts
+# are never final — provenance banner + /pro.evaluate verifies.
 #
-# Disabled by default. Turn on once Ollama is installed and a code-capable
-# 7B model is pulled (e.g. `ollama pull qwen2.5-coder:7b`). If enabled but
-# Ollama isn't reachable, the commands print a one-line note and exit 0 —
-# they never abort the pipeline.
+# Enabled by default. If Ollama is not installed or not reachable, /pro.local-*
+# prints one line and exits 0 — the pipeline continues unchanged. Set enabled:
+# false only if you never want local offload attempts.
 local_models:
-  # Master switch. When false, /pro.local-prep, /pro.local-review, and the
-  # local branch of /pro.materialize are no-ops. The hooks below also self-skip.
-  enabled: false
+  # Master switch. Default true — self-skips when Ollama is down.
+  enabled: true
 
   # Ollama HTTP endpoint. For Pi-class hardware, point this at a workstation:
   #   base_url: "http://workstation.local:11434"
@@ -382,10 +386,8 @@ local_models:
   telemetry: true
 
   # JSONL location. Relative paths resolve against the project root.
-  # Lives under .ai-knowledge/ (gitignored) by default — metrics are workspace
-  # state, not artifacts. Override with $SPECKIT_PRO_METRICS_FILE at runtime
-  # if you want to write into a shared/team location.
-  metrics_file: ".ai-knowledge/local-metrics.jsonl"
+  # Lives under .knowledge/metrics/ (gitignored). Override with $SPECKIT_PRO_METRICS_FILE.
+  metrics_file: ".knowledge/metrics/local-metrics.jsonl"
 
 # ── Notification Settings ─────────────────────────────────────────────────────
 # (Future: webhook/notification integration)

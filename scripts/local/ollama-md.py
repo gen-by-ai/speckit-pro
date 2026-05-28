@@ -39,8 +39,8 @@ line is appended on EVERY exit path (success or failure). Schema:
    "output_bytes":N,"wall_ms":N,"exit_code":N,"error":null|"..."}
 
 The bash drivers compute --metrics-file as
-<PROJECT_ROOT>/.ai-knowledge/local-metrics.jsonl so all features
-aggregate to one file (`.ai-knowledge/` is gitignored workspace state).
+<PROJECT_ROOT>/.knowledge/metrics/local-metrics.jsonl so all features
+aggregate to one file (`.knowledge/features/` is gitignored workspace state).
 """
 
 from __future__ import annotations

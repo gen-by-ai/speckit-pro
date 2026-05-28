@@ -24,11 +24,19 @@ set -euo pipefail
 MAX_ITERATIONS=20
 CHECKPOINT_FREQUENCY=3
 MODEL="claude-sonnet-4.6"
+SUBAGENT_MODEL=""          # when set, exported as CLAUDE_CODE_SUBAGENT_MODEL
 AGENT_CLI="copilot"
 RESUME=false
 FEATURE_NAME=""
 TASKS_PATH=""
 SPEC_DIR=""
+FEATURE_KNOWLEDGE_DIR=""  # derived after arg parsing if not provided
+
+# Effort levels per phase (Opus 4.7+ adaptive thinking)
+EFFORT_PLANNING="xhigh"
+EFFORT_EXECUTION="high"
+EFFORT_VERIFICATION="xhigh"
+EFFORT_EXPLORATORY="medium"
 
 # Evaluator (generator/evaluator split — Anthropic harness pattern)
 ENABLE_EVALUATOR=false
@@ -50,9 +58,15 @@ while [[ $# -gt 0 ]]; do
     --feature-name)     FEATURE_NAME="$2";     shift 2 ;;
     --tasks-path)       TASKS_PATH="$2";       shift 2 ;;
     --spec-dir)         SPEC_DIR="$2";         shift 2 ;;
+    --knowledge-feature-dir) FEATURE_KNOWLEDGE_DIR="$2"; shift 2 ;;
     --max-iterations)   MAX_ITERATIONS="$2";   shift 2 ;;
     --checkpoint-frequency) CHECKPOINT_FREQUENCY="$2"; shift 2 ;;
     --model)            MODEL="$2";            shift 2 ;;
+    --subagent-model)   SUBAGENT_MODEL="$2";   shift 2 ;;
+    --effort-planning)  EFFORT_PLANNING="$2";  shift 2 ;;
+    --effort-execution) EFFORT_EXECUTION="$2"; shift 2 ;;
+    --effort-verification) EFFORT_VERIFICATION="$2"; shift 2 ;;
+    --effort-exploratory)  EFFORT_EXPLORATORY="$2";  shift 2 ;;
     --agent-cli)        AGENT_CLI="$2";        shift 2 ;;
     --resume)           RESUME=true;           shift ;;
     --enable-evaluator) ENABLE_EVALUATOR=true; shift ;;
@@ -61,6 +75,28 @@ while [[ $# -gt 0 ]]; do
     *)                  echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+# ─── Derive FEATURE_KNOWLEDGE_DIR ──────────────────────────────────────────────
+if [[ -z "$FEATURE_KNOWLEDGE_DIR" ]]; then
+  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  FEATURE_KNOWLEDGE_DIR="$PROJECT_ROOT/.knowledge/features/$FEATURE_NAME"
+fi
+mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts" "$FEATURE_KNOWLEDGE_DIR/evaluations"
+
+# ─── Export Sub-Agent Model (when configured) ─────────────────────────────
+# Allows specialist sub-agents to run on a lighter model while the orchestrator
+# uses the primary model. See: claudefa.st/blog/guide/agents/sub-agent-best-practices
+if [[ -n "$SUBAGENT_MODEL" ]]; then
+  export CLAUDE_CODE_SUBAGENT_MODEL="$SUBAGENT_MODEL"
+fi
+
+# ─── Export Effort Levels ─────────────────────────────────────────────────
+# Agents read these to calibrate reasoning depth per phase.
+# See: claudefa.st/blog/guide/development/opus-4-7-best-practices
+export SPECKIT_EFFORT_PLANNING="$EFFORT_PLANNING"
+export SPECKIT_EFFORT_EXECUTION="$EFFORT_EXECUTION"
+export SPECKIT_EFFORT_VERIFICATION="$EFFORT_VERIFICATION"
+export SPECKIT_EFFORT_EXPLORATORY="$EFFORT_EXPLORATORY"
 
 # ─── Validation ──────────────────────────────────────────────────────────────
 if [[ -z "$FEATURE_NAME" || -z "$TASKS_PATH" || -z "$SPEC_DIR" ]]; then
@@ -74,8 +110,8 @@ if [[ ! -f "$TASKS_PATH" ]]; then
 fi
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-PROGRESS_FILE="$SPEC_DIR/progress.md"
-SESSION_FILE="$SPEC_DIR/session.md"
+PROGRESS_FILE="$FEATURE_KNOWLEDGE_DIR/progress.md"  # persistent audit trail
+SESSION_FILE="$SPEC_DIR/session.md"             # transient pipeline state
 CONTEXT_SUMMARY="$SPEC_DIR/context-summary.md"
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
@@ -382,6 +418,8 @@ main() {
   echo -e "${GREEN}║  Max iter:   $MAX_ITERATIONS | Checkpoints every $CHECKPOINT_FREQUENCY${RESET}"
   echo -e "${GREEN}║  Evaluator:  $([[ $ENABLE_EVALUATOR == true ]] && echo "enabled (threshold: ${EVAL_THRESHOLD}%, revisions: ${MAX_REVISIONS})" || echo 'disabled')${RESET}"
   echo -e "${GREEN}║  Model:      $MODEL${RESET}"
+  echo -e "${GREEN}║  Sub-agent:  ${SUBAGENT_MODEL:-"(same as model)"}${RESET}"
+  echo -e "${GREEN}║  Effort:     plan=${EFFORT_PLANNING} exec=${EFFORT_EXECUTION} verify=${EFFORT_VERIFICATION}${RESET}"
   echo -e "${GREEN}║  Agent CLI:  $resolved_cli${RESET}"
   echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════╝${RESET}"
   echo ""
@@ -521,6 +559,10 @@ main() {
 
     checkpoint_commit "implementation-complete" "$final_completed" "$final_total"
     update_session "implement" "completed" "All $final_total tasks complete in $((iteration - 1)) iterations"
+    echo ""
+    log_info "Next (chat pipeline): run pro.go Phase 7 in the agent —"
+    log_info "  /speckit.pro.reconcile → /speckit.pro.local-review → /speckit.pro.evaluate → /speckit.pro.knowledge-sync (sync on PASS)"
+    log_info "Hooks may also fire this chain on native /speckit.implement; /pro.go must not rely on hooks alone."
     exit 0
   else
     local remaining=$(( final_total - final_completed ))

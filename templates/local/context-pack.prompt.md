@@ -1,7 +1,7 @@
 # context-pack.md — local-model prompt
 
 You will read the supplied CONTEXT (spec, plan, tasks, repo-map.md, optional
-.repo-knowledge excerpts, optional sibling specs) and produce a compact
+.knowledge excerpts, optional sibling specs) and produce a compact
 **context pack** for the next implementing/evaluator agent.
 
 The context pack is the file Claude will read **instead of** spec.md +
@@ -34,7 +34,7 @@ its inputs and lose no load-bearing fact.
 - ...
 
 ## Invariants (must remain true)
-- <verbatim invariant from spec or .repo-knowledge>
+- <verbatim invariant from spec or .knowledge>
 - ...
 
 ## Acceptance criteria summary

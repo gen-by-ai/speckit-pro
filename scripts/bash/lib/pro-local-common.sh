@@ -4,7 +4,7 @@
 # pro-materialize. Sourced; not executed.
 #
 # Responsibilities:
-#   - Locate project root, spec dir, ai-knowledge dir
+#   - Locate project root, spec dir, feature knowledge dir (.knowledge/features/<feature>)
 #   - Load local_models.* from pro-config.yml (best-effort, no yq dependency)
 #   - Pick the right model per task via local_models.tasks_to_model routing
 #   - Detect whether Ollama is reachable; emit clear guidance if not
@@ -203,7 +203,7 @@ local_load_config() {
       *)    LOCAL_METRICS_FILE="$root/$v" ;;
     esac
   else
-    LOCAL_METRICS_FILE="$root/.ai-knowledge/local-metrics.jsonl"
+    LOCAL_METRICS_FILE="$root/.knowledge/metrics/local-metrics.jsonl"
   fi
 
   # local_models.telemetry: true|false (default true). When false, drivers

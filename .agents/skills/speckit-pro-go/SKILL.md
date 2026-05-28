@@ -12,6 +12,8 @@ metadata:
 
 Runs the native SpecKit pipeline — `specify → clarify → plan → tasks → implement` — with Pro quality gates, sprint contracts, and autonomous orchestration. Unlike the old monolithic runner, this is a **thin orchestrator**: all phase work is done by native SpecKit commands. When upstream improves `speckit.plan`, you automatically benefit.
 
+**Authoritative protocol:** `commands/pro.go.md` (including **knowledge integration** and **Phase 7**). When `knowledge.enabled: true`, run `/pro.knowledge-sync` at Phase 0, 2.5, 4 (before contract), 5a, each Phase 6 iteration, and Phase 7d (sync after PASS).
+
 ## User Input
 
 ```text

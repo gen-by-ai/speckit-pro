@@ -26,7 +26,7 @@ Optional:
 If no `session.md` exists:
 ```
 [Pro] No session state found.
-• To start a new pipeline: /pro.run <description>
+• To start a new pipeline: /pro.go <description>
 • To resume the implement loop only: /pro.loop feature=<name> tasks=<path> ...
 ```
 
@@ -58,8 +58,15 @@ Confirm resume? (yes/no)
 ### If interrupted during implement loop (most common):
 
 Check tasks.md for remaining work:
-- If all tasks done: output success summary, no action needed
-- If tasks remain: restart the orchestrator script:
+- If all tasks done: run **`pro.go.md` Phase 7** (post-implement) — do not stop at implement-complete:
+  ```
+  EXECUTE_COMMAND: /pro.reconcile
+  EXECUTE_COMMAND: /pro.local-review
+  EXECUTE_COMMAND: /pro.evaluate
+  EXECUTE_COMMAND: /pro.knowledge-sync
+  ```
+  Run knowledge-sync only after evaluator **PASS** (`knowledge.sync_after_evaluate: true`).
+- If tasks remain: restart the orchestrator script (each iteration still primes per `pro.loop.md` step 0 when enabled):
 
 **Bash**:
 ```bash
@@ -89,7 +96,7 @@ Check tasks.md for remaining work:
 
 ### If interrupted during a pipeline phase:
 
-Resume from the correct phase using the same phase execution protocol as `/pro.run`:
+Resume from the correct phase using the same phase execution protocol as `/pro.go` (including knowledge prime at Phase 0, 2.5, 4, 5a, and Phase 7 after implement when complete):
 
 - `specify`: EXECUTE_COMMAND speckit.specify
 - `clarify`: EXECUTE_COMMAND speckit.clarify

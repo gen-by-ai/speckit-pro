@@ -2,6 +2,84 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.19] — 2026-05-28
+
+Focus: **`knowledge-sync` wired through `/pro.go` and sibling processes** — prime/sync are mandatory pipeline steps when `knowledge.enabled: true`, not hook-only side effects.
+
+### Added
+- **`pro.go.md` Phase 7** — post-implement chain: reconcile → local-review → evaluate → knowledge-sync (sync only on PASS).
+- **`knowledge.prime_before_contract`** — prime after `/speckit.tasks`, before `/pro.contract`.
+
+### Changed
+- **`pro.go.md`** — knowledge integration table; Phase 6 step 0 primes each loop iteration; run-plan banner lists all prime/sync touchpoints.
+- **`pro.pickup.md`**, **`pro.resume.md`**, **`pro.loop.md`** — document Phase 7 and pickup post-loop sync.
+- **`pro-orchestrate.sh`** — prints Phase 7 reminder after implement-complete.
+- **`README.md`** — pipeline diagram shows knowledge-sync inside `/pro.go`.
+
+## [1.18] — 2026-05-28
+
+### Changed
+- **`local_models.enabled`** defaults to **`true`** in `pro-config.template.yml` and `extension.yml`. Local prep/review is the established pattern; commands self-skip in ~3s when Ollama is unreachable — pipeline never aborts. Set `false` only to disable local offload entirely.
+
+## [1.17] — 2026-05-28
+
+Focus: **automated knowledge layout migration** — one command for agents to move legacy paths and update project config.
+
+### Added
+- **`/speckit.pro.knowledge-migrate`** (`commands/pro.knowledge-migrate.md`, `scripts/bash/pro-knowledge-migrate.sh`) — dry-run + apply migration from `.repo-knowledge/` and `.ai-knowledge/` to `.knowledge/`; updates `.gitignore`; bootstraps missing `INDEX.md`; writes `.knowledge/MIGRATION-REPORT.md`. Agent checklist includes `pro-config.yml` patches and a suggested git commit scope.
+- Registered in **`extension.yml`** (v1.17).
+
+## [1.16] — 2026-05-28
+
+Focus: **unify `.repo-knowledge/` and `.ai-knowledge/` into a single `.knowledge/` tree** — one mental model, two git visibility zones.
+
+### Changed
+- **Single root `.knowledge/`** — shared team docs at root (commit); per-feature workspace at **`features/<slug>/`** (gitignore); telemetry at **`metrics/local-metrics.jsonl`**.
+- **CLI arg** `ai-knowledge-dir` → **`knowledge-feature-dir`**; env paths **`FEATURE_KNOWLEDGE_DIR`** = `.knowledge/features/<feature>`.
+- **Bootstrap templates** moved to `templates/knowledge/` (legacy `templates/repo-knowledge/` still accepted).
+- **Legacy resolution** — commands still read `.repo-knowledge/` and `.ai-knowledge/<feature>/` if the unified paths are not migrated yet.
+- **`README.md`** — merged knowledge sections; best-practices #14–15 collapsed into one item.
+
+### Migration
+```bash
+mkdir -p .knowledge/features .knowledge/metrics
+[ -d .repo-knowledge ] && mv .repo-knowledge/* .knowledge/ 2>/dev/null; rmdir .repo-knowledge 2>/dev/null
+[ -d .ai-knowledge ] && mv .ai-knowledge/* .knowledge/features/ 2>/dev/null; rmdir .ai-knowledge 2>/dev/null
+```
+
+## [1.15] — 2026-05-28
+
+Focus: **make `.repo-knowledge/` a first-class participant in the pipeline** — not an opt-in sidecar teams forget to enable.
+
+### Added
+- **`--mode bootstrap`** on **`/speckit.pro.knowledge-sync`** — seeds `.repo-knowledge/` from `templates/repo-knowledge/` (never overwrites existing files).
+- **`knowledge.auto_bootstrap`** (default `true`) — creates the starter tree on first prime when the directory is missing.
+- **`knowledge.prime_before_implement`**, **`knowledge.prime_each_loop_iteration`** — additional prime touchpoints.
+- **Hook wiring** (`.specify/extensions.yml`) — `before_plan` and `before_implement` fire knowledge prime.
+- **Starter templates** — `templates/repo-knowledge/` (+ mirror under `.specify/extensions/pro/templates/`).
+- **Command integration** — `/pro.loop`, `/pro.contract`, `/pro.evaluate`, `/pro.reconcile`, and `/pro.pickup` now explicitly load or enforce `.repo-knowledge/` (invariants, glossary, architecture, ADRs).
+
+### Changed
+- **`knowledge.enabled`** defaults to **`true`** in `pro-config.template.yml` and `extension.yml`.
+- **`knowledge.prime_before_plan`** defaults to **`true`**; `/pro.go` adds Phase 2.5 (prime before plan) and Phase 5a (prime before implement).
+- **Prime retrieval** always includes `domain/invariants.md` and `domain/glossary.md` when present.
+- **`README.md`** — adoption path and hook table updated for active knowledge usage.
+
+## [1.14] — 2026-05-28
+
+Focus: **remove optional `repo-ai` embedding index** — the vendored CLI added maintenance surface (Node deps, model download, index rebuilds) without enough adoption to justify keeping it in the extension bundle.
+
+### Removed
+- **`repo-ai/`** package (local MiniLM embeddings CLI, `vectordb/`, `embeddings.jsonl`).
+- **`.agents/skills/repo-ai-cli/SKILL.md`** — agent skill for the CLI.
+- **`--refresh-repo-ai`** flag and optional retrieval steps from **`/speckit.pro.reconcile`** and **`/speckit.pro.knowledge-sync`**.
+
+### Changed
+- **`/speckit.pro.knowledge-sync --mode prime`** — retrieval is **grep + INDEX.md link follow** only (same deterministic path that was previously the fallback).
+- **`/speckit.pro.deepen`** Tier A sources — `.repo-knowledge/` and codebase use **grep** only.
+- **`README.md`** — dropped “Local knowledge index” section; `.repo-knowledge/` docs updated accordingly.
+- **`extension.yml`** — version **1.14**.
+
 ## [1.13] — 2026-05-26
 
 Focus: **token offload via local Ollama sidecar + layer-1 measurement framework**. The Claude extension is great for interactive work, but as Pro usage grows the Claude-as-control-plane pattern starts costing real tokens for mostly-deterministic Markdown work: repo maps, context packs, risk registers, test strategies, task packets, first-pass review screens. v1.13 moves that work to local Ollama models and reframes Claude as a premium worker. From `.dev-work/dev.md`: "Claude should become a premium worker, not the whole factory." Local artifacts come with a provenance banner; Claude verifies before anything ships. MDASH-inspired evidence-pack discipline (`.dev-work/learning.md`) keeps the first-pass review signal-to-noise high. Layer-1 telemetry (JSONL + `/pro.local-metrics`) makes "is the local stack worth keeping" measurable instead of vibes.

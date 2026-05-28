@@ -93,8 +93,8 @@ For each question, attempt resolution from sources in priority order. Time-box e
 
 **Tier A — Local sources (always attempted):**
 
-1. **`.repo-knowledge/`** — if it exists, search via `repo-ai search` against `.repo-knowledge/`. Fall back to grep over `INDEX.md` and follow links. This is the highest-trust source (human-curated).
-2. **Codebase** — `repo-ai search` over the full repo if the index exists; otherwise `grep -r` for the entities/concepts named in the question. Read the top-k matching files (max 3 files, max 200 lines each).
+1. **`.knowledge/`** — if it exists, grep `INDEX.md` for query keywords and follow relative links (max 5 files, max 200 lines each). This is the highest-trust source (human-curated).
+2. **Codebase** — `grep -r` for the entities/concepts named in the question. Read the top matching files (max 3 files, max 200 lines each).
 3. **Sibling specs** — `grep` `specs/*/spec.md` and `specs/*/plan.md` for the entities/concepts in question. Prior decisions on the same area are highly relevant.
 4. **Git history** — `git log --since='90 days ago' --all --grep='<keyword>' -- <relevant-paths>` for recent commit messages and PR titles touching the affected paths.
 
@@ -174,7 +174,7 @@ Section: Key Entities — Quote
 Why we're asking: The spec implies edits are allowed (FR-007), but the code in src/quotes/model.ts:54 throws on any update after `accepted`. Sources disagree.
 
 Sources consulted (no clear resolution):
-- ✗ .repo-knowledge/: no entry for Quote lifecycle
+- ✗ .knowledge/: no entry for Quote lifecycle
 - ⚠ code: src/quotes/model.ts:54 forbids edits post-accept
 - ⚠ issue: X-1408 says "minor edits OK until bound"
 - ✗ docs: no design doc on Quote edit policy
@@ -234,7 +234,7 @@ Print to stdout:
 5. **Re-runnable.** Cheap enough to invoke after every clarify or plan edit. Idempotent on output files.
 6. **Never silent mutation.** `spec.md` is only modified in `--apply` mode, and even then only stages the diff — no auto-commit.
 7. **Capability-based source discovery.** Tool names appear only in the capability-detection table. The investigator body operates on capability handles (`issue-tracker.fetch(id)`, `docs.search(query)`).
-8. **Graceful degradation.** Missing sources are silent skips, not errors. A run with only `.repo-knowledge/` + code should still produce useful questions.
+8. **Graceful degradation.** Missing sources are silent skips, not errors. A run with only `.knowledge/` + code should still produce useful questions.
 
 ## Output Protocol
 

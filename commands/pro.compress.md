@@ -47,6 +47,8 @@ Read all available artifacts from `<FEATURE_DIR>`:
 | `contracts/` | Extract: endpoint names and signatures only |
 | `progress.md` | Extract: last 3 iteration summaries |
 | `session.md` | Extract: current phase and status |
+| `.knowledge/domain/invariants.md` | Extract: invariant headings + one-line summaries (max 15 lines) |
+| `.knowledge/domain/glossary.md` | Extract: terms referenced in `spec.md` only |
 
 ## Output Format
 
@@ -95,8 +97,12 @@ Write to `<FEATURE_DIR>/context-summary.md`:
 - Iter <N-1>: <one-line summary>
 - Iter <N-2>: <one-line summary>
 
+## Repo Invariants (from .knowledge/)
+- <invariant 1 — one line>
+- <invariant 2 — one line>
+
 ## Key Constraints & Gotchas
-<3-5 bullet points of important constraints from spec, plan, or progress>
+<3-5 bullet points of important constraints from spec, plan, progress, or invariants>
 ```
 
 ## Token Estimate (--verbose)

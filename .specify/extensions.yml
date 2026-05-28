@@ -23,8 +23,8 @@ hooks:
     args: --mode prime
     enabled: true
     optional: true
-    prompt: Prime the agent with .repo-knowledge/ context before writing the spec?
-    description: Retrieval-only knowledge prime — grounds the agent in existing domain/architecture. No-op if .repo-knowledge/ does not exist.
+    prompt: Prime the agent with .knowledge/ context before writing the spec?
+    description: Retrieval-only knowledge prime — grounds the agent in existing domain/architecture. Auto-bootstraps .knowledge/ on first run when configured.
     condition: null
   before_clarify:
   - extension: git
@@ -35,6 +35,14 @@ hooks:
     description: Auto-commit before spec clarification
     condition: null
   before_plan:
+  - extension: pro
+    command: speckit.pro.knowledge-sync
+    args: --mode prime
+    enabled: true
+    optional: true
+    prompt: Re-prime from .knowledge/ before writing the plan?
+    description: Surfaces domain/architecture/invariants again before /speckit.plan widens scope. Respects knowledge.prime_before_plan in pro-config.yml.
+    condition: null
   - extension: git
     command: speckit.git.commit
     enabled: true
@@ -51,6 +59,14 @@ hooks:
     description: Auto-commit before task generation
     condition: null
   before_implement:
+  - extension: pro
+    command: speckit.pro.knowledge-sync
+    args: --mode prime
+    enabled: true
+    optional: true
+    prompt: Prime from .knowledge/ before implementation?
+    description: Surfaces invariants and architecture context immediately before /speckit.implement. Respects knowledge.prime_before_implement in pro-config.yml.
+    condition: null
   - extension: git
     command: speckit.git.commit
     enabled: true
@@ -164,8 +180,8 @@ hooks:
     command: speckit.pro.knowledge-sync
     enabled: true
     optional: true
-    prompt: Reconcile .repo-knowledge/ against this sprint's code changes? (runs only on evaluator PASS)
-    description: Diffs the diff against repo-level knowledge claims; writes pro-knowledge.md proposals. Self-skips if evaluator did not return PASS, if .repo-knowledge/ does not exist, or if only tests/fixtures changed.
+    prompt: Reconcile .knowledge/ against this sprint's code changes? (runs only on evaluator PASS)
+    description: Diffs the diff against repo-level knowledge claims; writes pro-knowledge.md proposals. Self-skips if evaluator did not return PASS, if .knowledge/ does not exist, or if only tests/fixtures changed.
     condition: null
   after_checklist:
   - extension: git

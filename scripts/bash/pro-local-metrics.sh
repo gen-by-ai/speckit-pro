@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # pro-local-metrics.sh — Aggregate the local-model telemetry JSONL into a
-# human-readable dashboard. Reads .ai-knowledge/local-metrics.jsonl and prints:
+# human-readable dashboard. Reads .knowledge/metrics/local-metrics.jsonl and prints:
 #   • per-task call counts, latency p50/p95, failure rate
 #   • per-review-type precision (kept ÷ produced) and recall
 #     (agreed ÷ (agreed + missed))
@@ -43,7 +43,7 @@ done
 PROJECT_ROOT="$(local_project_root)"
 local_load_config "$PROJECT_ROOT"
 
-[[ -z "$METRICS_FILE" ]] && METRICS_FILE="${LOCAL_METRICS_FILE:-$PROJECT_ROOT/.ai-knowledge/local-metrics.jsonl}"
+[[ -z "$METRICS_FILE" ]] && METRICS_FILE="${LOCAL_METRICS_FILE:-$PROJECT_ROOT/.knowledge/metrics/local-metrics.jsonl}"
 
 if [[ ! -f "$METRICS_FILE" ]]; then
   local_warn "no metrics file at $METRICS_FILE"
