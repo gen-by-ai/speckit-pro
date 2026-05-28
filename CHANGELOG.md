@@ -6,6 +6,10 @@ All notable changes to SpecKit Pro will be documented in this file.
 
 Focus: **`knowledge-sync` wired through `/pro.go` and sibling processes** — prime/sync are mandatory pipeline steps when `knowledge.enabled: true`, not hook-only side effects.
 
+**Install / update:** use the moving tag **`latest`** (always points at the newest release):
+`specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/latest.zip`
+Pin a version with `v1.19.0.zip` if you need reproducibility. Maintainers: `./scripts/bash/release-tag.sh vX.Y.Z` then push version tag + `git push origin refs/tags/latest --force`.
+
 ### Added
 - **`pro.go.md` Phase 7** — post-implement chain: reconcile → local-review → evaluate → knowledge-sync (sync only on PASS).
 - **`knowledge.prime_before_contract`** — prime after `/speckit.tasks`, before `/pro.contract`.

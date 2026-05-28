@@ -29,13 +29,13 @@
 
 ```bash
 # 1. Install
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.18.zip
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/latest.zip
 
 # 2. Config
 cp .specify/extensions/pro/pro-config.template.yml .specify/extensions/pro/pro-config.yml
 
 # 3. Verify
-specify extension list   # → SpecKit Pro v1.18
+specify extension list   # → SpecKit Pro (version from extension.yml)
 
 # 4. (Recommended) Local models — pipeline tries Ollama by default
 brew install ollama && ollama serve &
@@ -135,8 +135,9 @@ Tune with `/speckit.pro.local-metrics`. Disable entirely: `local_models.enabled:
 ## Installation & updates
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/v1.18.zip
-# update: specify extension remove pro && re-add with new tag
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/latest.zip
+# update: specify extension remove pro && re-add with latest.zip (always current release)
+# pin:    .../archive/refs/tags/v1.19.0.zip
 ```
 
 From source: `specify extension add --dev /path/to/speckit-pro`
