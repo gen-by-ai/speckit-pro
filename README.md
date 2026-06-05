@@ -140,14 +140,23 @@ Tune with `/speckit.pro.local-metrics`. Disable entirely: `local_models.enabled:
 ## Installation & updates
 
 ```bash
-specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/latest.zip
-# update: specify extension remove pro && re-add with latest.zip (always current release)
-# pin:    .../archive/refs/tags/v1.20.0.zip
+# install — or update in place: --force overwrites, no separate `remove` needed
+specify extension add pro --from https://github.com/gen-by-ai/speckit-pro/archive/refs/tags/latest.zip --force
+# pin:    .../archive/refs/tags/v1.21.0.zip
 ```
 
-From source: `specify extension add --dev /path/to/speckit-pro`
+Updating pro replaces `.specify/extensions/pro/` only — your `specs/` and `.knowledge/` are untouched.
 
-Updating replaces `.specify/extensions/pro/` only — your `specs/` and `.knowledge/features/` are untouched.
+**Upgrade the whole stack in one pass** — `specify` CLI + base templates + agents + pro:
+
+```bash
+.specify/extensions/pro/scripts/bash/update-all.sh                 # claude only (default)
+.specify/extensions/pro/scripts/bash/update-all.sh claude copilot  # multiple agents; first = default
+```
+
+Runs `specify self upgrade` → `specify init . --force` (latest templates) → re-installs your agents and catalog extensions → reinstalls pro. Your authored `constitution.md` and `pro-config*.yml` are snapshotted and restored; `specs/` and `.knowledge/` are never touched. Flags: `--pin <tag>`, `--no-base`. Run it from a project that uses pro (it refuses to run in the pro source repo).
+
+From source: `specify extension add --dev /path/to/speckit-pro --force`
 
 ## Agent CLIs
 

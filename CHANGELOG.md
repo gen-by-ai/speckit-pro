@@ -2,6 +2,14 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.21] — 2026-06-05
+
+Focus: **one-command full-stack upgrade** — keep the `specify` CLI, base Spec Kit templates, agent integrations, and pro itself current in a single pass.
+
+- New helper **`scripts/bash/update-all.sh`**: runs `specify self upgrade` → `specify init . --force` (latest templates/scripts) → re-installs agents + catalog extensions that the registry rebuild drops → reinstalls pro from `latest` (or a pinned `--pin <tag>`). Supports multiple agents (`update-all.sh claude copilot gemini`; first = default integration), `--no-base` to skip the template refresh, and refuses to run inside the pro source repo.
+- Snapshots and restores the only non-regenerable, gitignored artifacts under `.specify/` (an authored `constitution.md` and `pro-config*.yml`); `specs/` and `.knowledge/` are never touched. Empirically verified that `specify init . --force` regenerates `.specify/extensions/.registry` and drops extensions it does not itself reinstall — so the script re-registers them and reports any it could not restore (non-zero exit).
+- **`README.md`** — "Installation & updates" now documents in-place `--force` updates (no separate `remove` needed) and the full-stack `update-all.sh`.
+
 ## [1.20] — 2026-06-05
 
 Focus: **adaptive parallel deep-analysis engine** — split deep code analysis into dependency-clustered portions and run them across concurrent workers, merged (with a tie-breaker) into one report.
