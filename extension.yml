@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.19"
+  version: "1.20"
   description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts with edge-case matrix + browser-test rows, replayable agent-browser test scripts with regression carry-forward, stub/no-op auto-fail gate, branch-symmetry enforcement, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery + edge-case depth checklist, context resets, AGENT.md self-update, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, pickup-existing-feature workflow, local Ollama sidecar (prep/materialize/first-pass review) with evidence-pack discipline so Claude becomes a premium worker not the whole factory"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
@@ -92,6 +92,11 @@ provides:
     - name: speckit.pro.local-metrics
       file: commands/pro.local-metrics.md
       description: "Read-only dashboard of local-model performance (latency, failure rate) and first-pass review quality (precision, recall) aggregated from .knowledge/metrics/local-metrics.jsonl. Pure Python; never calls Claude or Ollama."
+
+    # ── Parallel deep-analysis (fan-out engine) ───────────────────────────────
+    - name: speckit.pro.scan
+      file: commands/pro.scan.md
+      description: "Adaptive parallel deep-code-analysis. Partitions the repo into dependency-clustered portions, fans them out across concurrent workers (in-harness sub-agents, or headless agent-CLI processes from a terminal), merges with a tie-breaker into one report (architecture map, dependency overview, risk hotspots) under .knowledge/scan/, and offers findings to .knowledge/. Self-degrades to sequential; never aborts. Shares its engine with the existing investigation phases (analyze first, opt-in)."
 
   config:
     - name: "pro-config.yml"
@@ -241,3 +246,25 @@ defaults:
       before_evaluate: true
     telemetry: true                                    # write one JSONL line per ollama-md.py call
     metrics_file: ".knowledge/metrics/local-metrics.jsonl"  # relative paths resolve against project root
+  parallel:
+    enabled: true                # master switch; /pro.scan self-skips and retrofits stay serial when false
+    substrate: "auto"            # auto | in-harness | cli | sequential
+    workers:
+      in_harness: null           # null → min(16, cores-2)
+      cli: null                  # null → cores-2
+    strategy: "dependency-cluster"  # dependency-cluster | size-bucket (fallback)
+    worker_timeout_seconds: 300
+    max_consecutive_failures: 3  # run-level circuit breaker (reuses orchestrator default)
+    tiebreak: true               # always dispatch a tie-breaker on conflict
+    oversized: "repartition-then-summarize"  # repartition-then-summarize | repartition | summarize | skip
+    report:
+      dir: ".knowledge/scan"
+      keep_archive: true         # write both latest.md and <timestamp>.md
+      feed_knowledge: true       # offer findings via knowledge-sync (additive/proposal only)
+    phases:                      # per-phase retrofit switches — all OFF by default (opt-in); analyze is first target
+      analyze: false
+      local_prep: false
+      deepen: false
+      prime: false
+    telemetry: true
+    metrics_file: ".knowledge/metrics/fanout-metrics.jsonl"
