@@ -2,6 +2,10 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.21.1] — 2026-06-05
+
+Patch: **`update-all.sh` step 5 now runs unattended.** Reinstalling pro from its GitHub archive triggers spec-kit's "Untrusted Source" confirmation, which `--force` does not suppress — under `set -e` the script aborted before reinstalling pro (caught by a live end-to-end test, not the static review). The pro-install step now auto-confirms the prompt (it is our own published release), so the full upgrade completes headlessly. Verified against a real project: pro 1.19 → 1.21, `pro-config.yml` preserved byte-for-byte across the pro-dir replacement, `git` extension re-registered, `specs/`/`.knowledge/` untouched.
+
 ## [1.21] — 2026-06-05
 
 Focus: **one-command full-stack upgrade** — keep the `specify` CLI, base Spec Kit templates, agent integrations, and pro itself current in a single pass.

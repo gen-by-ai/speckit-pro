@@ -162,7 +162,12 @@ fi
 
 # ---- 5. SpecKit Pro ---------------------------------------------------------
 echo "==> 5/5  Reinstalling SpecKit Pro ($PRO_TAG)"
-specify extension add pro --from "$PRO_URL" --force
+# pro ships as a raw GitHub archive (not in any spec-kit catalog), so
+# `extension add --from <url>` shows an "Untrusted Source" confirmation that
+# --force does NOT suppress. Auto-confirm it so the script runs unattended —
+# this is our own published release. (Pipe a 'y'; printf finishes before the
+# CLI reads, so no SIGPIPE under `set -o pipefail`.)
+printf 'y\n' | specify extension add pro --from "$PRO_URL" --force
 
 # ---- restore snapshotted bits (pro reinstall replaced .specify/extensions/pro/)
 [[ -f "$BK/constitution.md" ]] && cp -f "$BK/constitution.md" .specify/memory/constitution.md
