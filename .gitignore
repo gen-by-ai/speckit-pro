@@ -1,0 +1,30 @@
+# ── Installed SpecKit environment — never commit ───────────────────────────
+# This repo IS the speckit-pro extension SOURCE. The canonical files live at
+# the repo ROOT: extension.yml, pro-config.template.yml, commands/, agents/,
+# scripts/, templates/, README.md, CHANGELOG.md, .extensionignore.
+#
+# Everything below is a dogfooding INSTALL of SpecKit + this extension. It only
+# duplicates the root source (e.g. .specify/extensions/pro/extension.yml is
+# byte-identical to ./extension.yml), so it stays on disk but out of git.
+
+# Installed base SpecKit framework + pro/git extension copies + integration registry
+.specify/
+
+# Rendered agent skills (Claude Code / generic)
+.agents/
+
+# Claude Code workspace scaffolding
+.claude/
+CLAUDE.md
+
+# Rendered GitHub Copilot agents/prompts.
+# Scoped on purpose — leaves room for real CI under .github/workflows/.
+.github/agents/
+.github/prompts/
+.github/copilot-instructions.md
+
+# IDE settings installed by SpecKit
+.vscode/
+
+# macOS
+.DS_Store
