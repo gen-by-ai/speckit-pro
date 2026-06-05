@@ -2,7 +2,7 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
-## [Unreleased]
+## [1.20] — 2026-06-05
 
 Focus: **adaptive parallel deep-analysis engine** — split deep code analysis into dependency-clustered portions and run them across concurrent workers, merged (with a tie-breaker) into one report.
 

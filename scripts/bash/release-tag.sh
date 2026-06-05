@@ -43,7 +43,7 @@ fi
 
 git tag -a "$VERSION" -m "SpecKit Pro $VERSION
 
-$MESS"
+$MSG"
 git tag -f latest "$COMMIT"
 
 echo ""
