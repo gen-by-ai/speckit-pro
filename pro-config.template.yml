@@ -389,6 +389,64 @@ local_models:
   # Lives under .knowledge/metrics/ (gitignored). Override with $SPECKIT_PRO_METRICS_FILE.
   metrics_file: ".knowledge/metrics/local-metrics.jsonl"
 
+# ── Parallel Deep-Analysis (fan-out engine) ──────────────────────────────────
+# Splits deep code analysis into dependency-clustered portions and runs them
+# across concurrent workers, merging into one report. Two surfaces share one
+# engine: the /pro.scan command, and (incrementally) the existing investigation
+# phases. Adaptive substrate: in-harness sub-agents when run in the agent harness;
+# headless agent-CLI processes from a terminal; sequential fallback. Self-skips
+# / degrades — never aborts the pipeline solely because it cannot parallelize.
+parallel:
+  # Master switch. When false, /pro.scan self-skips and retrofitted phases stay serial.
+  enabled: true
+
+  # Substrate selection. "auto" = in-harness when in the agent harness, else cli,
+  # else sequential. Override with "in-harness" | "cli" | "sequential".
+  # Env override: SPECKIT_PRO_PARALLEL_SUBSTRATE
+  substrate: "auto"
+
+  # Default worker count per substrate. null = resource-derived (favors speed):
+  #   in-harness → min(16, cores-2);  cli → cores-2. Operator may lower; never exceeds the ceiling.
+  workers:
+    in_harness: ~   # null
+    cli: ~          # null
+
+  # Partition strategy. dependency-cluster (default) groups files that import one
+  # another into coherent subsystems; size-bucket is the deterministic fallback.
+  strategy: "dependency-cluster"
+
+  # Per-worker timeout (seconds) before the slot is reclaimed and the worker is marked timed-out.
+  worker_timeout_seconds: 300
+
+  # Run-level circuit breaker — reuses the orchestrator's default. Abort the scan
+  # when failures cross this threshold (a systemic fault fails fast).
+  max_consecutive_failures: 3
+
+  # Always dispatch a tie-breaker worker on conflict (records verdict + dissent).
+  # false = list both candidates, let the human resolve.
+  tiebreak: true
+
+  # Oversized-portion fallback:
+  #   repartition-then-summarize (default) | repartition | summarize | skip
+  oversized: "repartition-then-summarize"
+
+  # Report output.
+  report:
+    dir: ".knowledge/scan"
+    keep_archive: true     # write both latest.md and <timestamp>.md
+    feed_knowledge: true   # offer durable findings via knowledge-sync (additive/proposal only)
+
+  # Per-phase retrofit switches. All OFF by default (opt-in); analyze is the first target.
+  phases:
+    analyze: false
+    local_prep: false
+    deepen: false
+    prime: false
+
+  # Telemetry — one JSONL line per worker event, aggregated by /pro.local-metrics.
+  telemetry: true
+  metrics_file: ".knowledge/metrics/fanout-metrics.jsonl"
+
 # ── Notification Settings ─────────────────────────────────────────────────────
 # (Future: webhook/notification integration)
 notify:

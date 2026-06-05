@@ -28,3 +28,12 @@ CLAUDE.md
 
 # macOS
 .DS_Store
+
+# SpecKit Pro — workspace-only autonomous-run state (never commit)
+.knowledge/features/
+.knowledge/metrics/
+.knowledge/scan/
+
+# Python bytecode (e.g. from init.sh py_compile smoke checks)
+__pycache__/
+*.pyc
