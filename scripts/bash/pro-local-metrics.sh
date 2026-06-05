@@ -45,13 +45,15 @@ local_load_config "$PROJECT_ROOT"
 
 [[ -z "$METRICS_FILE" ]] && METRICS_FILE="${LOCAL_METRICS_FILE:-$PROJECT_ROOT/.knowledge/metrics/local-metrics.jsonl}"
 
+HAVE_LOCAL=true
 if [[ ! -f "$METRICS_FILE" ]]; then
-  local_warn "no metrics file at $METRICS_FILE"
+  local_warn "no local-metrics file at $METRICS_FILE"
   local_warn "(it appears after the first /pro.local-prep, /pro.local-review, or /pro.materialize run)"
-  exit 0
+  HAVE_LOCAL=false
 fi
 
 # Everything else lives in Python — bash is the wrong tool for percentiles.
+if [[ "$HAVE_LOCAL" == true ]]; then
 SPECKIT_PRO_METRICS_FILE="$METRICS_FILE" \
 SPECKIT_PRO_SINCE="$SINCE" \
 SPECKIT_PRO_FILTER_FEATURE="$FILTER_FEATURE" \
@@ -285,3 +287,47 @@ if skips:
         print(f"    {reason:<28}  {n}x")
     hr()
 PY
+fi
+
+# ── Fan-out engine metrics (parallel deep-analysis / /pro.scan) ───────────────
+# Aggregates .knowledge/metrics/fanout-metrics.jsonl (FR-015): per-worker latency
+# p50/p95, failure/timeout rate, event counts. Self-skips if the file is absent.
+FANOUT_METRICS="${SPECKIT_PRO_FANOUT_METRICS:-$PROJECT_ROOT/.knowledge/metrics/fanout-metrics.jsonl}"
+if [[ -f "$FANOUT_METRICS" ]]; then
+  python3 - "$FANOUT_METRICS" <<'PY'
+import json, sys
+path = sys.argv[1]
+events = []
+for line in open(path, encoding="utf-8"):
+    line = line.strip()
+    if line:
+        try: events.append(json.loads(line))
+        except ValueError: pass
+
+def pct(xs, p):
+    if not xs: return 0
+    xs = sorted(xs); k = (len(xs) - 1) * p / 100.0
+    f = int(k); c = min(f + 1, len(xs) - 1)
+    return xs[f] if f == c else xs[f] + (xs[c] - xs[f]) * (k - f)
+
+by = {}
+for e in events:
+    by[e.get("event")] = by.get(e.get("event"), 0) + 1
+runs = sorted({e.get("run_id") for e in events if e.get("run_id")})
+durs = [e["duration_ms"] for e in events if e.get("event") == "complete" and isinstance(e.get("duration_ms"), int)]
+dispatched = by.get("dispatch", 0)
+failed = by.get("fail", 0) + by.get("timeout", 0)
+fail_pct = (100.0 * failed / dispatched) if dispatched else 0.0
+
+print()
+print("  " + "─" * 70)
+print(f"  FAN-OUT ENGINE  (parallel deep-analysis)")
+print(f"  File: {path}")
+print(f"  Runs: {len(runs)}   Workers dispatched: {dispatched}   "
+      f"complete: {by.get('complete',0)}  fail: {by.get('fail',0)}  "
+      f"timeout: {by.get('timeout',0)}  tiebreak: {by.get('tiebreak',0)}")
+print(f"  Worker failure rate: {fail_pct:.0f}%   "
+      f"Worker latency p50: {pct(durs,50)/1000:.1f}s  p95: {pct(durs,95)/1000:.1f}s")
+print("  " + "─" * 70)
+PY
+fi

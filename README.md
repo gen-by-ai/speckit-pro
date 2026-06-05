@@ -23,6 +23,7 @@
 | Honest QA | Evaluator + agent-browser (not self-grading) |
 | Domain memory | `.knowledge/` primes specs; syncs after PASS |
 | Thin specs → depth | `/speckit.pro.deepen` (opt-in) |
+| Parallel deep analysis | `/speckit.pro.scan` — fan out across workers; adaptive in-harness/CLI |
 | Local-first offload | Ollama prep/review by default; skips if unavailable |
 
 ## Quick start

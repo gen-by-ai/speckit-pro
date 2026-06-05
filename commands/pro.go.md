@@ -313,7 +313,18 @@ EXECUTE_COMMAND: /pro.knowledge-sync --mode prime --query "<spec.md H1 + next in
 ```
 
 ### Phase 5 — Analyze
-Skip if `quality.run_analyze: false`.
+
+**Phase 5 pre-pass — parallel fan-out (optional, opt-in).** Skip unless `parallel.enabled: true` AND `parallel.phases.analyze: true` (both default such that this is **off**, so the default path is byte-for-byte today's serial analyze — FR-013). `/speckit.analyze` is a **native upstream command and is never forked**; this is a Pro-side pre-pass that *feeds* it (research R8). When enabled:
+
+```
+EXECUTE_COMMAND: /pro.scan
+```
+
+This fans the codebase out across concurrent workers and writes `.knowledge/scan/latest.md` (architecture map, dependency overview, risk hotspots, Coverage Ledger). Load that report into context before running analyze below, so the cross-artifact consistency check is grounded in a fresh, parallel-built picture of the code. The pre-pass self-degrades to sequential and never aborts — if it fails, log a line and continue to analyze unchanged.
+
+> **Engine-seam note (for future retrofits)**: the same `parallel.phases.*` switches gate other investigation phases. `analyze` is the first retrofit target (this block). The natural next target is `local_prep` (it already reads the whole repo), then `deepen` / `prime` — each flips on independently behind its switch, reusing the `/pro.scan` engine with no new mechanism.
+
+Then run native analyze. Skip if `quality.run_analyze: false`.
 ```
 EXECUTE_COMMAND: /speckit.analyze
 ```

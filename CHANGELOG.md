@@ -2,6 +2,16 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [Unreleased]
+
+Focus: **adaptive parallel deep-analysis engine** — split deep code analysis into dependency-clustered portions and run them across concurrent workers, merged (with a tie-breaker) into one report.
+
+- New command **`/speckit.pro.scan`**: partitions the repo (dependency clustering, size-bucket fallback, oversized pre-split), fans portions out across concurrent workers, merges into `.knowledge/scan/latest.md` (+ timestamped archive) with a mandatory Coverage Ledger (no silent gaps). Offers durable findings to `.knowledge/` via the additive/proposal path only.
+- **Adaptive substrate**: in-harness sub-agent workers when run as a skill; headless agent-CLI worker processes from a terminal (`scripts/bash/pro-scan.sh`); sequential fallback. Auto-detected, overridable, pluggable for a future remote backend. Never aborts solely for lack of parallelism.
+- Engine internals: `scripts/local/partition.py` (deterministic partitioner), `scripts/bash/lib/pro-fanout-common.sh` (bounded worker pool + manual timeout + circuit breaker + JSONL telemetry), `scripts/local/scan_report.py` (atomic, lock-guarded report writer), `scripts/local/validate_schemas.py`.
+- **Phase retrofit (opt-in, off by default)**: `parallel.phases.analyze` runs a fan-out pre-pass that feeds native `/speckit.analyze` (the native command is never forked). `local_prep`/`deepen`/`prime` reuse the same seam.
+- Config: new `parallel:` block (`pro-config.template.yml` + `extension.yml` defaults). Telemetry aggregated by `/pro.local-metrics` (worker latency p50/p95, failure rate).
+
 ## [1.19] — 2026-05-28
 
 Focus: **`knowledge-sync` wired through `/pro.go` and sibling processes** — prime/sync are mandatory pipeline steps when `knowledge.enabled: true`, not hook-only side effects.

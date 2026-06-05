@@ -157,13 +157,20 @@ fanout_run_pool() {
       fi
       i=$(( i + 1 ))
     done
-    a_pid=("${keep_pid[@]}"); a_start=("${keep_start[@]}"); a_portion=("${keep_portion[@]}")
+    # bash 3.2 + set -u: expanding an empty array via [@] errors. Guard it.
+    if [[ "${#keep_pid[@]}" -gt 0 ]]; then
+      a_pid=("${keep_pid[@]}"); a_start=("${keep_start[@]}"); a_portion=("${keep_portion[@]}")
+    else
+      a_pid=(); a_start=(); a_portion=()
+    fi
 
     if [[ "$cb_max" -gt 0 && "$consec_fail" -ge "$cb_max" ]]; then
       broke=1
       fanout_err "circuit breaker: $consec_fail consecutive worker failures — aborting remaining dispatch"
       local q
-      for q in "${a_pid[@]}"; do kill -TERM "$q" 2>/dev/null; done
+      if [[ "${#a_pid[@]}" -gt 0 ]]; then
+        for q in "${a_pid[@]}"; do kill -TERM "$q" 2>/dev/null; done
+      fi
     fi
   done
 
