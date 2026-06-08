@@ -29,7 +29,32 @@ The arguments are passed as the feature description to `/speckit.specify`. If em
 
 Keep every `<pro-knowledge-prime>` block in context until the next prime replaces it. On first run with no `.knowledge/`, run `--mode bootstrap` first (or let auto-bootstrap run).
 
-## Phase 0 — Knowledge Prime
+## Phase 0 — Run Start (instrumentation + improvement prime)
+
+Before any phase work, do two cheap things that make the whole run **measurable** and **self-improving**. Both self-skip silently if `reporting.enabled: false`.
+
+**Resolve the Pro scripts dir once** (works in both an installed project and the source repo):
+```bash
+PRO_SCRIPTS="$(git rev-parse --show-toplevel)/.specify/extensions/pro/scripts/bash"
+[ -f "$PRO_SCRIPTS/pro-report.sh" ] || PRO_SCRIPTS="$(git rev-parse --show-toplevel)/scripts/bash"
+```
+
+**1. Stamp a run-start marker.** This captures the start time + git HEAD so Phase 8 can report exactly how long the run took and what changed:
+```bash
+RUN_ID="$(bash "$PRO_SCRIPTS/pro-report.sh" start)"
+```
+Hold `RUN_ID` in context for the entire pipeline — Phase 8 needs it. (If `pro-report.sh` is absent, print one line and continue without instrumentation — never abort.)
+
+**2. Improvement prime — read what past runs learned.** If `.knowledge/improvements.md` exists, load it now and keep it in context. This is the closed-loop input: it holds curated learnings written by previous `/pro.go` runs at Phase 8 (e.g. "the evaluator keeps failing on missing tests → write tests first", "split work-units > 8 tasks").
+
+The ledger has four status sections — **`## Promoted`**, **`## Proposed (awaiting human promotion)`**, **`## Archived`**, **`## Pruned (disproven)`**. **Apply ONLY the entries under `## Promoted`.** A promoted entry is one a human (or `/pro` promote, gated by the Phase 7.5 probe guard) deliberately moved into that section; it is the only tier this run is allowed to act on. Entries under `## Proposed` are visible for context — read them so you understand what past runs *suggested* — but **never auto-apply a Proposed entry**: doing so would let an unvetted, possibly self-serving lesson silently reshape this run's behavior (the reward-hacking-via-ledger guard, D11). `## Archived` and `## Pruned` are history only; ignore them for behavior. Applying Promoted-only is what keeps `/pro.go` a harness that gets *reliably* better over time rather than one that drifts on its own untested advice. Skip if the file is missing (first run) — Phase 8 will create it.
+
+Optionally show the operator where they stand before starting:
+```bash
+bash "$PRO_SCRIPTS/pro-report.sh" aggregate --last 5   # cross-run trends, if any prior runs exist
+```
+
+## Phase 0.5 — Knowledge Prime
 
 Before *anything else*, ground the agent in repo-level context so the spec it's about to write doesn't reinvent terms, violate invariants, or duplicate work in an existing bounded context.
 
@@ -117,7 +142,8 @@ Display the run plan and ask "Proceed? (yes/no)":
 ┌──────────────────────────────────────────────────────────────┐
 │  SpecKit Pro — Pipeline Runner                               │
 ├──────────────────────────────────────────────────────────────┤
-│  0. /pro.knowledge-sync --mode prime  (bootstrap if needed)  │
+│  0. run-start marker + read .knowledge/improvements.md        │
+│  0.5 /pro.knowledge-sync --mode prime (bootstrap if needed)   │
 │  1. /speckit.specify    gate: [YES|NO]                       │
 │  1c. /pro.deepen        (skipped if disabled; pauses for     │
 │                          human Qs, then /pro.deepen --apply) │
@@ -128,11 +154,14 @@ Display the run plan and ask "Proceed? (yes/no)":
 │  4b. /pro.local-prep    → /pro.materialize                    │
 │  5a. /pro.knowledge-sync prime (before implement)             │
 │  5. /speckit.analyze    skip: [YES|NO]                       │
-│  6. loop (+ prime each iter)  max: N                          │
+│  6. loop (+ prime each iter)  max: N   parallel: [ON|off]     │
 │  7. reconcile → local-review → evaluate → knowledge-sync      │
+│  7.5 probe guard (only if a change self-applies; else no-op)  │
+│  8. run-report (duration/files/eval) + proposal ledger        │
 ├──────────────────────────────────────────────────────────────┤
 │  Model: <model>  │  Agent CLI: <agent_cli>                   │
 │  Local: <local_models.enabled>  (Ollama sidecar)             │
+│  Parallel implement: <parallel.phases.implement>             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,13 +171,22 @@ If the user says no: `Pipeline cancelled. Run /pro.go <description> to start aga
 
 ## Phase Protocol
 
-For each phase: **announce → execute → gate → update session**.
+For each phase: **bracket → announce → execute → gate → update session**.
 
+- **Bracket (telemetry)**: immediately before executing a driven phase, mark its start; immediately after it returns, mark its stop. This is what gives Phase 8's run-report its per-phase wall-clock table. Self-skips silently if `reporting.enabled: false` or the manifest is absent (the marker self-no-ops):
+  ```bash
+  bash "$PRO_SCRIPTS/pro-report.sh" phase start "$RUN_ID" "<phase-name>"   # e.g. specify, clarify, plan, tasks, contract, analyze, implement, reconcile, evaluate, knowledge-sync
+  # ... run the phase ...
+  bash "$PRO_SCRIPTS/pro-report.sh" phase stop  "$RUN_ID" "<phase-name>"
+  ```
+  Use a stable `<phase-name>` token per phase (lowercase, no spaces) so start/stop pair up. An unpaired start contributes 0 to that phase's duration (never a fabricated number) — so still emit `stop` even if the phase aborted, when you can.
 - **Announce**: `[Pro] Phase N — running /speckit.<cmd>`
 - **Execute**: run the native SpecKit command with `EXECUTE_COMMAND`
 - **Gate** (if `true`): ask `⏸ Review above. Press Enter to continue or type 'abort'.` If abort: print the feature directory for resuming with `/pro.resume` and stop.
 - **Gate** (if `false`): print `[Pro] Auto-continuing...`
 - **Update session**: append a one-line entry to `<FEATURE_DIR>/session.md`
+
+> **In-harness honesty about cost/tokens.** When `/pro.go` *is* the loop (you are running the phases yourself in this chat, the default path), there is no headless agent-CLI invocation to read a `total_cost_usd` / `usage` JSON object from. So any per-iteration `pro-report.sh call …` you emit (see Phase 6) leaves `--cost-usd` / `--input-tokens` / `--output-tokens` / `--cache-*-tokens` / `--turns` / `--duration-ms` **unset** — they record as JSON `null` ("unavailable"), never `0`. Honestly-unavailable beats a fabricated zero: the headless `pro-orchestrate.sh` path is the only one that can populate those from real CLI telemetry.
 
 ## Phase Order
 
@@ -515,14 +553,39 @@ Check for `<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md`:
 
 **5. Implement**
 
-Implement all tasks in the work unit. For each task:
+Two execution modes. The mode is chosen per work-unit; default is serial (byte-for-byte today's behavior).
+
+> **Decide the mode.** Use the **parallel path** only when ALL of these hold:
+> - `parallel.enabled: true` AND `parallel.phases.implement: true` in `pro-config.yml`, AND
+> - the current work-unit contains **2+ tasks marked `[P]`** (SpecKit's "parallel-safe — different files" marker), AND
+> - those `[P]` tasks touch **disjoint file sets** (verify by reading the task lines; if two `[P]` tasks name the same file, treat them as serial).
+>
+> Otherwise use the **serial path**.
+
+**Serial path (default).** Implement each task in the work-unit in order:
 - Write the code
 - Verify the acceptance criteria (including edge cases)
 - Mark the task `- [x]` in `tasks.md` immediately when done
 
-Follow the Scope of Autonomy rules from `pro.loop.md`: never delete files, never `git push`, never run `--force` commands.
+**Parallel path (opt-in — real multi-agent fan-out).** This is the engine that was previously only wired into `/pro.scan` (analyze pre-pass); here it parallelizes *implementation*:
 
-Signal underspecified requirements with `<pro-uncertainty>…</pro-uncertainty>` in the progress entry.
+1. Collect the disjoint `[P]` tasks in this work-unit into a worker set. Determine the worker count: `parallel.workers.in_harness` else `min(16, cores−2)`; clamp the worker set to that ceiling (queue the rest).
+2. **Dispatch one sub-agent per `[P]` task, concurrently** (use the Agent tool — same in-harness substrate as `/pro.scan` step 2). Give each sub-agent: the task line + its acceptance criteria from the sprint contract, the relevant task-packet (`task-packets/TASK-<id>-*.md` if present), and `AGENT.md`. Instruct each to implement **only its task's files**, verify acceptance criteria, and return a structured result (files written, tests run, status, any `<pro-uncertainty>`). Because the file sets are disjoint, the shared working tree never conflicts. (If you cannot guarantee disjointness, dispatch with worktree isolation instead and merge after — but prefer disjoint `[P]` tasks, which is exactly what the marker promises.)
+3. **Log telemetry** for each worker so the run-report and `/pro.local-metrics` can measure the fan-out — reuse the engine's logger:
+   ```bash
+   bash "$PRO_SCRIPTS/pro-report.sh" event dispatch  "$RUN_ID" "<task-id>" in-harness
+   # ...when the sub-agent returns:
+   bash "$PRO_SCRIPTS/pro-report.sh" event complete  "$RUN_ID" "<task-id>" in-harness "<duration_ms>"
+   # on failure/timeout: event fail / event timeout (with the elapsed ms + a short error)
+   ```
+   If `parallel.max_consecutive_failures` workers fail in a row, stop dispatching (circuit breaker) and finish the remaining tasks serially. **When the breaker trips, tag this iteration's per-iteration `call` (see step 9b below) with `--cb-trip`** so the run-report's circuit-breaker count reflects it:
+   ```bash
+   bash "$PRO_SCRIPTS/pro-report.sh" call "$RUN_ID" --phase implement --status continue --cb-trip
+   ```
+4. **Merge**: after all workers in the set return, mark each completed task `- [x]` in `tasks.md`, fold every sub-agent's file list + decisions + uncertainties into this iteration's progress entry, and continue. A failed/timed-out worker leaves its task `- [ ]` for the next iteration (never silently dropped).
+5. Any remaining **non-`[P]` (sequential) tasks** in the work-unit run on the serial path above, after the parallel set merges.
+
+Follow the Scope of Autonomy rules from `pro.loop.md` (serial OR parallel): never delete files, never `git push`, never run `--force` commands. Signal underspecified requirements with `<pro-uncertainty>…</pro-uncertainty>` in the progress entry.
 
 **6. Append to progress log**
 
@@ -564,10 +627,21 @@ Log the commit hash in `<FEATURE_KNOWLEDGE_DIR>/progress.md`.
 
 Review what you learned this iteration. If you discovered anything new about how to build, run, or test this project, append it to `<FEATURE_KNOWLEDGE_DIR>/AGENT.md`. Keep each bullet under 20 words. This file is read at the top of every future iteration.
 
-**Print at the end of every iteration:**
+**9b. Record the iteration as a telemetry `call`.** So the run-report can count iterations, interventions, rework, and circuit-breaker trips for the in-harness loop, append one `call` entry per iteration. Self-skips if `reporting.enabled: false` or the manifest is absent (the subcommand self-no-ops):
+```bash
+bash "$PRO_SCRIPTS/pro-report.sh" call "$RUN_ID" --phase implement --status continue
 ```
-[Pro] ── Iteration <N> complete — <completed>/<total> tasks ─
+- **Status**: pass the iteration outcome — `--status continue` (more tasks remain), `complete` (last iteration, all tasks done), `blocked`, or `error`.
+- **`--intervention`**: add this flag on any iteration where the operator had to step in (answered a `<pro-uncertainty>`, fixed a smoke-test break by hand, resolved a gate, unblocked a stuck task).
+- **`--rework`**: add this flag on any iteration that re-did work a prior iteration had marked done (e.g. addressing evaluator `NEEDS_REVISION` feedback, reopening a `[x]` task).
+- **`--cb-trip`**: add this flag when the parallel circuit breaker tripped this iteration (see step 5).
+- **Cost / tokens left null in-harness.** Do **not** pass `--cost-usd` / `--input-tokens` / `--output-tokens` / `--cache-*-tokens` / `--turns` / `--duration-ms`: when you are the loop, those numbers are genuinely unavailable, and the schema stores omitted flags as `null` ("unavailable"), never a misleading `0`. Only the headless `pro-orchestrate.sh` path, which parses each agent-CLI JSON result, fills them in.
+
+**Print at the end of every iteration** (live progress — keep it to one line):
 ```
+[Pro] ── Iter <N> done — <completed>/<total> tasks · <files-this-iter> files · <mode: serial|parallel ×W> ─
+```
+where `mode` reflects whether this iteration used the parallel path and how many workers (`×W`) it dispatched.
 
 Then immediately begin iteration N+1 without waiting for user input. **Do not stop between iterations.**
 
@@ -634,19 +708,92 @@ Default mode is `sync`. Writes `<FEATURE_DIR>/pro-knowledge.md` and may auto-app
 
 Append to `session.md`: `Phase 7 complete — reconcile, evaluate, knowledge-sync (if PASS).`
 
+### Phase 7.5 — Probe guard before any self-applied change
+
+This phase is the safety interlock between "what a run *learned*" and "what a run is allowed to *change about itself*." It runs **only when something is about to self-apply** — that is:
+- a **ledger-promoted** learning (a `## Promoted` entry, or a `/pro` promote flipping `proposed → promoted`) is about to alter this run's config/behavior, OR
+- **knowledge-sync auto-apply** is about to write additive edits to `.knowledge/` (per `knowledge.auto_apply_tier`, the Phase 7d sync step).
+
+If nothing self-applies this run (the overwhelmingly common case — default `/pro.go` neither promotes a learning nor runs an auto-apply tier), Phase 7.5 is a **no-op** and you skip it silently. So default runs never hit it. Likewise skip the guard call (treat as no-op) if `reporting.probes.guard_enabled: false`.
+
+When a self-apply *is* pending, **before** writing the change run the probe regression gate. Use the `PRO_SCRIPTS` resolved in Phase 0:
+
+```bash
+bash "$PRO_SCRIPTS/pro-improve-guard.sh" check --change-desc "<one line: exactly what is about to apply>" || guard_rc=$?
+```
+
+Interpret the exit code (`pro-improve-guard.sh` runs each committed `.knowledge/probes/{known-good,known-bad}/<case>` fixture through the evaluator and gates on the outcome):
+
+| Exit | Meaning | Action |
+|---|---|---|
+| `0` | **APPLY-OK** — all known-good ACCEPTed, no known-bad ACCEPTed | Apply the change. |
+| `1` | **BLOCK** — a known-good failed or a known-bad slipped through | **Do NOT apply.** Alert the operator, leave the change as a `## Proposed` entry. |
+| `2` | **DRIFT BLOCK** — a known-bad flipped REJECT→ACCEPT vs `probe-drift.json` | **Do NOT apply.** Surface the loud DRIFT ALERT to the operator; withhold the self-apply; leave as proposal. |
+| `3` | **FAIL-CLOSED** — probes missing/empty | **Do NOT apply.** Fail closed: an unguarded self-apply is never allowed. Tell the operator to seed probes (`pro-improve-guard.sh bootstrap`) and leave the change as a proposal. |
+
+**Rule: apply ONLY on exit 0.** Any non-zero exit ⇒ BLOCK + operator alert + leave the lesson/change parked under `## Proposed (awaiting human promotion)` — never force it through. This guard never aborts the pipeline: if the script itself is absent, print one line (`[Pro] probe guard unavailable — withholding self-apply, leaving as proposal`) and treat it as fail-closed (do not apply), then continue to Phase 8. Per-case + summary probe outcomes are logged to the gitignored `.knowledge/metrics/probes/<run_id>.jsonl`.
+
+Append to `session.md`: `Phase 7.5 — probe guard <ran: APPLY-OK | BLOCKED rc=N | no-op (no self-apply)>.`
+
+### Phase 8 — Run Report & Self-Improvement
+
+This is what makes the run **trackable** and the harness **self-improving**. Skip only if `reporting.enabled: false`. Run it even when the pipeline stopped early (partial reports are useful) — it never aborts.
+
+**8a. Generate the run report.** Close the instrumentation opened in Phase 0:
+```bash
+bash "$PRO_SCRIPTS/pro-report.sh" finish \
+  --feature "<feature-slug>" --run-id "$RUN_ID" \
+  --eval-verdict "<verdict from Phase 7c>" --eval-score "<score from Phase 7c>" \
+  --iterations "<loop iterations used>" --max-iterations "<loop.max_iterations>"
+```
+This writes `specs/<feature>/run-report.md` and prints it, and appends a one-line summary to `.knowledge/metrics/runs.jsonl`. The report answers the three questions the operator asked for: **how long** (wall-clock), **what it produced** (files +/-, lines +/-, commits, tasks, iterations, parallel workers, local-model calls), and **how it went / where to improve** (eval verdict + score, parallelization factor, heuristic notes).
+
+**8b. Curate durable learnings as *proposals* (the closed loop).** The report's "Where to improve" section is auto-generated heuristics. Now add the *qualitative* lesson that only you (having run the pipeline) can write, so the **next** `/pro.go` sees it at Phase 0. Skip if `reporting.self_improve: false`.
+
+A lesson you write this run is **never** authoritative for the next run — it is a hypothesis your run produced, and an un-vetted lesson auto-applied to the next run is exactly the reward-hacking channel D11 closes. So append it under **`## Proposed (awaiting human promotion)`** in `.knowledge/improvements.md` (create the file from its template header, with the four sections `## Promoted`, `## Proposed (awaiting human promotion)`, `## Archived`, `## Pruned (disproven)`, if missing). **Never write into `## Promoted` and never auto-promote a Proposed entry** — promotion is a deliberate human action (or `/pro` promote, which is itself gated by the Phase 7.5 probe guard). Entry format, newest first:
+
+```markdown
+- status: proposed
+  [<ISO date>] (<feature-slug>, eval <verdict> <score>) **<one-line lesson>.**
+  Why: <root cause you observed this run>.
+  Apply: <concrete change the next run should make — a prompt habit, a config key, a task-shaping rule>.
+  Evidence: <the concrete signal this run that justifies the lesson — e.g. "evaluator NEEDS_REVISION on sprint-2: 3 ACs lacked browser-tests", or "iter 4-6 reworked auth after ambiguous spec". A reviewer must be able to check it before promoting.>
+```
+Rules: each entry must be **actionable** (names a habit, a config key, or a rule — not "do better"); carry `status: proposed`; include an `Evidence:` line a human can verify before promoting; keep it to ≤4 lines; only write a learning if this run actually surfaced one (a clean PASS with no anomalies needs no new entry).
+
+**8c. Show the trend.** Surface where this run sits against history:
+```bash
+bash "$PRO_SCRIPTS/pro-report.sh" aggregate --last 10
+```
+This prints cross-run averages (duration, eval score, iterations, PASS rate, parallel adoption, speedup) and concrete recommendations.
+
+**8d. Ledger curation + bound.** Keep `.knowledge/improvements.md` from growing without limit (an unbounded ledger becomes noise the next Phase 0 can't act on, and a place for stale advice to hide). Skip if `reporting.self_improve: false`. This step **only re-files entries between sections** — it never deletes history, never edits a lesson's text, and **never promotes** anything (promotion stays a human action). Operate only on the ledger file you own at Phase 8; do not touch `## Promoted` ordering or content beyond moving overflow out of it per the rule below.
+
+1. **Enforce the size bound.** Read `reporting.improvements.max_entries` (default **50**). It bounds the **combined** count of `## Promoted` + `## Proposed (awaiting human promotion)`. If the combined count exceeds the bound, move the **lowest-value** overflow entries into `## Archived` (oldest-first within the same value tier; prefer archiving from `## Proposed` before `## Promoted`, since Promoted entries are human-vetted and actively applied). "Lowest-value" = oldest + least-recently-referenced + most-superseded by a newer entry on the same topic. Archiving is a move (cut from its section, paste under `## Archived` with an `archived: <ISO date> (size-bound)` annotation), never a delete.
+2. **Prune later-disproven entries.** If this run produced concrete evidence that an existing Promoted or Proposed entry is **wrong** (its `Apply:` advice, when followed, caused the friction it claimed to prevent — or a probe/eval result contradicts it), move that entry into `## Pruned (disproven)` with a `disproven-by: <this RUN_ID>` line citing the disproving run. Do not silently drop it — the pruned section is the audit trail of what the harness *used* to believe and why it stopped.
+3. **Never auto-promote, never delete.** Curation re-files (`Proposed`/`Promoted` → `Archived`, or → `Pruned`); it does not move anything *into* `## Promoted`, and it removes nothing from the file. The four sections always remain; an emptied section keeps its heading.
+
+Append to `session.md`: `Phase 8 complete — run-report written, improvements ledger updated (proposal added; curated to ≤<max_entries>).`
+
 ## Completion
 
-After Phase 7 (and all prior phases) complete successfully:
+After Phase 8 (and all prior phases) complete:
 
 ```
 ╔═══════════════════════════════════════════════════════════╗
 ║  SpecKit Pro — Pipeline Complete ✓                        ║
 ╠═══════════════════════════════════════════════════════════╣
-║  Feature:  <name>                                         ║
-║  Tasks:    <completed>/<total>                            ║
-║  Branch:   <git branch>                                   ║
+║  Feature:   <name>                                        ║
+║  Duration:  <wall-clock from run-report>                  ║
+║  Produced:  <files> files (+<ins>/-<del>), <commits> commits  ║
+║  Tasks:     <completed>/<total>   Iterations: <N>/<max>   ║
+║  Parallel:  <on ×W | off>   Eval: <verdict> <score>       ║
+║  Branch:    <git branch>                                  ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Next: /pro.status <feature>   — detailed progress
-      Review <FEATURE_DIR>/pro-drift.md and pro-knowledge.md (if written)
+Run report: specs/<feature>/run-report.md
+Trends:     pro-report.sh aggregate   (cross-run dashboard)
+Learnings:  .knowledge/improvements.md (next /pro.go applies ## Promoted only; review ## Proposed to promote)
+Next:       /pro.status <feature>   — detailed progress
+            Review <FEATURE_DIR>/pro-drift.md and pro-knowledge.md (if written)
 ```

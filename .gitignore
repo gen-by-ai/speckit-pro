@@ -33,6 +33,10 @@ CLAUDE.md
 .knowledge/features/
 .knowledge/metrics/
 .knowledge/scan/
+# Committed cross-run surfaces (the ONLY .knowledge/ paths that ship):
+#   .knowledge/improvements.md         — proposal-based learnings ledger
+#   .knowledge/probes/                 — human-authored regression fixtures (NOT ignored above)
+#   .knowledge/features/*/contracts/*.sha256 — rubric seals (force-added with `git add -f`)
 
 # Python bytecode (e.g. from init.sh py_compile smoke checks)
 __pycache__/

@@ -194,12 +194,36 @@ EXT_TEMPLATE="${PROJECT_ROOT}/.specify/extensions/pro/templates/browser-test-tem
 [ -f "${EXT_TEMPLATE}" ] && cp "${EXT_TEMPLATE}" "${SPEC_DIR}/browser-tests/_template.sh"
 ```
 
+### 5c. Seal the contract
+
+The contract IS the rubric. To make rubric-tampering detectable, compute a cryptographic seal of the finished contract file and commit it alongside. `/pro.evaluate` recomputes this hash before grading and fails the sprint if the contract was altered after sealing (see `## Rubric immutability` below).
+
+Resolve `CONTRACT_FILE` to the absolute path of the contract you just wrote (`<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md`). The seal path is the same path with the `.md` suffix replaced by `.sha256` (e.g. `.../contracts/sprint-1.sha256`). Use the hash ladder — python3 hashlib first, then `shasum -a 256`, then `sha256sum`, and only if none exist write the literal token `UNSEALED` (an honest capability gap — never abort the pipeline for it):
+
+```bash
+SEAL="${CONTRACT_FILE%.md}.sha256"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONTRACT_FILE" > "$SEAL"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$CONTRACT_FILE" | cut -d' ' -f1 > "$SEAL"
+elif command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$CONTRACT_FILE" | cut -d' ' -f1 > "$SEAL"
+else
+  printf 'UNSEALED\n' > "$SEAL"   # honest capability gap — never abort
+fi
+```
+
+The `.sha256` is the single committed artifact under the otherwise-gitignored `contracts/` path. Step 6 force-adds it past `.gitignore`.
+
 ### 6. Checkpoint
 
 ```bash
 git add .
+git add -f "$SEAL" "$CONTRACT_FILE"
 git commit -m "[Pro] Sprint <N> contract generated — <phase name>"
 ```
+
+The `git add -f` is mandatory: the per-feature `contracts/` directory is normally gitignored, but the seal (and the contract it seals) must be committed so `/pro.evaluate` can recompute and compare the hash across the run. Force-adding only the seal + the contract keeps the rest of `contracts/` gitignored.
 
 If no git changes: skip commit.
 
@@ -224,3 +248,15 @@ LOW criteria:      <N>
 The evaluator will grade the next sprint against these criteria.
 Review: <FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md
 ```
+
+## Rubric immutability (why the seal exists)
+
+The sprint contract is the **rubric** the evaluator grades against. If the implementing agent could quietly edit that rubric — loosen an Expected Behavior, downgrade a CRITICAL row, delete an inconvenient edge case — it would be grading itself against a softened bar. That is the textbook reward-hacking failure mode: optimize the score by moving the goalposts instead of doing the work. The seal closes that hole.
+
+Rules:
+
+- **Only `/pro.contract` seals.** This command is the sole writer of `sprint-<N>.sha256`. Nothing else regenerates the seal — not the loop, not the evaluator, not a manual edit. The seal is the trusted fingerprint of the rubric *as it was agreed before implementation started*.
+- **The loop never hand-edits a sealed contract or its seal.** A `pro.loop.md` Scope-of-Autonomy hard rule forbids editing the sealed `sprint-<N>.md` or the `.sha256`. If the loop discovers the rubric genuinely needs a new row (e.g. a new MP-1435 branch the contract failed to cover), it does **not** patch the file — it STOPs and re-runs `/pro.contract`, which appends the row and RE-SEALs as a fresh, committed artifact. Re-sealing is a deliberate, attributable act by the contract generator, not a silent in-loop mutation.
+- **Defense in depth.** The cryptographic seal (verified by `/pro.evaluate` Step 1.5) and the loop hard rule are independent layers — either alone catches tampering; together they are belt-and-suspenders. A reward-hacking loop cannot "fix" a mismatch by re-running the evaluator, because a mismatch returns a hard fail with no revision retry.
+
+Honest capability gaps are handled openly, not silently: if no hashing tool exists at seal time, the seal file holds the literal token `UNSEALED`, and `/pro.evaluate` logs a WARN and proceeds rather than failing the sprint. A seal that is *absent* on an evaluation-enabled run is treated as tamper (fail-closed); a seal that says `UNSEALED` is treated as a known gap (fail-open).

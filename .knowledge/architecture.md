@@ -8,6 +8,21 @@
 |------|----------------|-------|
 | Parallel deep-analysis (fan-out) | `/pro.scan` · `scripts/bash/pro-scan.sh` | Splits the repo into dependency-clustered portions, fans out across concurrent workers, merges → `.knowledge/scan/`. See [#parallel-deep-analysis-fan-out-engine](#parallel-deep-analysis-fan-out-engine). |
 
+## Self-improving headless orchestration & observability (feature 002)
+
+Makes the **terminal/headless substrate** correctly drive an external agent CLI for unattended runs, makes every run measurable, and hardens the self-improvement loop against in-context reward hacking. All by extending existing mechanisms — no parallel write path, no native `/speckit.*` fork.
+
+| Component | Path | Role |
+|---|---|---|
+| Headless orchestrator | `scripts/bash/pro-orchestrate.sh` | Capability profile (`cli_capabilities`/`cli_has_cap`), `build_claude_flags` (literal `--append-system-prompt`, gated permissions, **cumulative** `--max-budget-usd`, session `--resume`), `parse_agent_result` (python3→text, no jq), per-call/phase telemetry hand-off, rubric-tamper hard-fail. Copilot/gemini/generic branches unchanged. |
+| Run reporter | `scripts/bash/pro-report.sh` | `phase`/`call` subcommands → per-run manifest `calls[]`/`phases[]`; `finish` rolls up cost/tokens/turns/per-phase-wall-clock/intervention/rework/cb (null-not-0); `aggregate` eval-score trend + regression flag. |
+| OTel emitter | `scripts/bash/pro-otel-emit.sh` | **Opt-in** OTLP/HTTP JSON export (GenAI conventions), per-run root + per-phase child spans + metrics, `claude.session_id` join key. Off by default; self-skips; log-not-fatal. |
+| Probe guard | `scripts/bash/pro-improve-guard.sh` | `check`/`drift`/`bootstrap`. Gates every self-applied change on committed `.knowledge/probes/{known-good,known-bad}/` fixtures; **fail-closed**; drift alarm on REJECT→ACCEPT. |
+| Rubric seal | `commands/pro.contract.md` (write) · `commands/pro.evaluate.md` (verify) | Per-sprint `contracts/*.sha256` committed seal; verify pre-grade → `FAIL:rubric-mutated`. Evaluator runs read-only + distinct-model-capable. |
+| Improvements ledger | `.knowledge/improvements.md` | 4 sections (Promoted/Proposed/Archived/Pruned); Phase 0 applies **Promoted only**; Phase 8 appends Proposals + curates (size-bounded). |
+
+**Config**: the `orchestration:` block + extended `evaluation:`/`reporting:` (`regression`/`otel`/`probes`/`improvements`) in `pro-config` + `extension.yml` defaults. **Committed surfaces** under `.knowledge/`: `improvements.md`, `probes/` fixtures, `contracts/*.sha256` seals — everything else under `.knowledge/metrics/` is gitignored telemetry. **Invariants respected**: degrade-not-abort (capability profile + fail-closed gate); single telemetry writer (`pro-report.sh`); default behavior byte-for-byte unchanged (only the opt-in headless-claude path changes).
+
 ## Authentication
 
 _(routes, middleware, token lifecycle — link to code paths)_
