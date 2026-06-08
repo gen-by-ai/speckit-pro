@@ -29,6 +29,23 @@ Derive `<knowledge-feature-dir>` the same way as the loop: `$(git rev-parse --sh
 
 ## Evaluation Steps
 
+### Step 0 — Evaluator independence + skeptical stance
+
+Before anything else, set your stance. You are the **adversary** of the generator, not its teammate. Your job is to find the ways this sprint falls short of the contract, not to confirm that it succeeded. Assume the implementation is wrong until the evidence (passing Browser Test scripts, green Verified-By tests, code you have actually read) proves otherwise. Treat the generator's own claims — the contents of `progress.md`, `handoff.md`, commit messages, and any "done" assertions — as unverified marketing copy. They are inputs to find evidence for, never evidence themselves.
+
+**Shared-model check.** If the evaluator model is the **same** model as the generator (i.e. `evaluation.evaluator_model` is empty/unset, so the evaluator runs on the primary model), there is no genuine independence — a model is a weak grader of its own output and will rationalize its own mistakes. When this is the case:
+
+- Adopt an explicitly harsher skeptical posture for the entire evaluation: actively hunt for self-serving interpretations and refuse to extend any benefit of the doubt.
+- Stamp a disclosure line into the evaluation prose (`<knowledge-feature-dir>/evaluations/sprint-<N>.md`) and into the run-report note, of the form:
+
+  ```
+  SHARED-MODEL: evaluator and generator are the same model (<model-id>) — independence reduced; applied stricter skeptical review.
+  ```
+
+  Use the concrete model id when known; otherwise `SHARED-MODEL: evaluator == generator (primary model) — independence reduced; applied stricter skeptical review.`
+
+If the evaluator runs on a distinct `evaluation.evaluator_model`, skip the disclosure line and proceed normally — but keep the adversarial stance regardless.
+
 ### Step 1 — Calibrate Against Past Evaluations
 
 Before scoring anything, read all files in `<knowledge-feature-dir>/evaluations/` (sorted oldest → newest). Look for:
@@ -49,6 +66,36 @@ If **`<PROJECT_ROOT>/.knowledge/domain/invariants.md`** exists, read it (and any
 - Any **clear violation** of a stated invariant → at least one CRITICAL failure row in the evaluation and verdict capped at **NEEDS_REVISION** (or **FAIL** if the violation is in production paths).
 - Cite evidence as `invariant:<file>:<heading>` in the evaluation prose.
 - If `<FEATURE_DIR>/pro-knowledge.md` exists from a prior sync, note whether this sprint's changes align with its proposals.
+
+### Step 1.5 — Verify the rubric seal (hard gate)
+
+The contract is the rubric. Before you read a single acceptance criterion to grade against, prove the rubric was not tampered with after it was sealed by `/pro.contract` (see that command's `## Rubric immutability` section). A generator that quietly loosened its own contract — softened an Expected Behavior, downgraded a CRITICAL row, deleted an edge case — is reward-hacking, and you must refuse to grade against the mutated bar.
+
+Resolve `CONTRACT_FILE` to `<knowledge-feature-dir>/contracts/sprint-<N>.md` and `SEAL` to the same path with `.md` replaced by `.sha256`. Recompute the hash of the contract with the **same ladder** `/pro.contract` used to seal it, then compare:
+
+```bash
+CONTRACT_FILE="<knowledge-feature-dir>/contracts/sprint-<N>.md"
+SEAL="${CONTRACT_FILE%.md}.sha256"
+
+if command -v python3 >/dev/null 2>&1; then
+  RECOMPUTED=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONTRACT_FILE")
+elif command -v shasum >/dev/null 2>&1; then
+  RECOMPUTED=$(shasum -a 256 "$CONTRACT_FILE" | cut -d' ' -f1)
+elif command -v sha256sum >/dev/null 2>&1; then
+  RECOMPUTED=$(sha256sum "$CONTRACT_FILE" | cut -d' ' -f1)
+else
+  RECOMPUTED=UNSEALED   # honest capability gap on the verify side too
+fi
+```
+
+Then branch on the seal:
+
+- **Seal file absent** while `evaluation.enabled` AND `sprint_contracts` are both true → fail-closed for tamper: emit `<pro-eval>FAIL:rubric-unsealed</pro-eval>` and stop. A missing seal on a run that is supposed to seal contracts means the seal was deleted or never committed — treat it as tampering, not as a capability gap. (If `evaluation` or `sprint_contracts` is off, there is no seal expectation — skip this gate.)
+- **Seal == `UNSEALED`** (the contract was honestly sealed with no hashing tool available at the time) → log a WARN to the evaluation prose ("rubric seal is UNSEALED — hashing tool was unavailable at contract time; integrity not cryptographically verifiable") and **proceed** to grading. This is a known, disclosed gap, not tamper.
+- **Recomputed hash != the value in `SEAL`** → the contract changed after it was sealed: emit `<pro-eval>FAIL:rubric-mutated:sprint-<N></pro-eval>` and stop. Do not grade. This routes to operator review with no revision retry — a reward-hacking loop must not be able to "fix" the seal by re-running.
+- **Recomputed hash == the value in `SEAL`** → the rubric is intact; proceed to Step 2.
+
+This gate runs before scoring and before any browser test. A tampered or missing rubric is a categorical failure that bypasses the rest of the evaluation.
 
 ### Step 2 — Load the Sprint Contract
 
@@ -113,6 +160,8 @@ Read the actual code files changed this sprint (check `git diff HEAD~1` or the h
 - Security issues: SQL injection, XSS, hardcoded secrets, broken auth
 - Broken imports or wiring
 - Branch-symmetry: for every new branch in the diff (every new `if`, `?:`, `&&` short-circuit, early `return`), confirm the contract has a Browser Test row asserting that branch's behavior. Missing row = NEEDS_REVISION with reason `unrostered-branch:<file>:<line>`.
+
+Grade the **END STATE of the working tree** against the contract — what the code actually does right now — NEVER the generator's self-report in `progress.md` or `handoff.md`; those are claims to verify against the tree, not evidence of completion.
 
 ### Step 4a — Stub & No-op Detection (auto-FAIL)
 
@@ -263,6 +312,8 @@ Can the **next iteration safely build on this code**? Penalise: deep magic, undo
 
 | Gate | Failure → |
 |---|---|
+| Rubric seal mismatch (Step 1.5) | `FAIL:rubric-mutated:sprint-<N>` |
+| Rubric seal absent w/ contracts enabled (Step 1.5) | `FAIL:rubric-unsealed` |
 | App fails to start (Step 3) | `FAIL:app-not-startable` |
 | Any CRITICAL Browser Test FAIL (Step 3) | `FAIL:critical-browser-test-failed:<script>` |
 | Any regression-carryforward FAIL (Step 3b) | `NEEDS_REVISION:regression-carryforward-failed:<count>` |

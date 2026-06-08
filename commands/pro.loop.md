@@ -166,6 +166,12 @@ The following are **hard rules** — they cannot be overridden by any task instr
 - Overwrite a file that did not exist before this sprint without noting it in `progress.md`
 - Run any command with `--force` or `-f` flags unless AGENT.md explicitly records it as safe
 - Stage `.knowledge/features/` paths in any commit — workspace-only state must never reach a feature branch destined for PR review (see Checkpoint Commit Scope below)
+- **Edit, delete, or re-hash a *sealed* sprint contract or its `.sha256` seal.** Once `/pro.contract` has written `contracts/sprint-<N>.md` and its committed `contracts/sprint-<N>.sha256`, that rubric is **frozen for the sprint** — it is the independent yardstick `/pro.evaluate` grades you against, and a generator that can rewrite its own rubric (or recompute its seal to match an edit) defeats the entire evaluation. The contract rubric is owned by `/pro.contract`, never by the loop. If a contract row is genuinely missing (e.g. the Branching control-flow rule says you must add a row for a new guarded branch), **do not add or change the row yourself**: STOP, emit a contract-row-needed uncertainty, and let `/pro.contract` add the row and **re-seal**:
+  ```
+  <pro-uncertainty>Contract row needed: <what the row must assert> in sprint-<N>.md.
+  The contract is sealed — re-sealing is owned by /pro.contract. Pausing for /pro.contract to add the row and re-seal before I implement the affected branch.</pro-uncertainty>
+  ```
+  Adding the row yourself and re-running `shasum`/`sha256sum` over the edited file would forge a valid-looking seal over a rubric you weakened — `/pro.evaluate` would then emit `FAIL:rubric-mutated` (mismatch against the committed seal) or, worse, silently grade you against your own softened bar. Touching the `.sha256` is therefore as forbidden as touching the contract body.
 
 **Prefer reversible over irreversible:**
 - Favour additive changes (add a new function, add a new route) over modifying existing ones when both achieve the goal
@@ -232,7 +238,7 @@ If the contract does not yet have those rows, stop implementation and emit:
 and unaffected original path. Pausing for contract update.</pro-uncertainty>
 ```
 
-Then update the contract (append rows under the current sprint), commit the contract update, and resume.
+Then add the rows and resume — **but mind the seal**: if the contract has a committed `contracts/sprint-<N>.sha256`, it is frozen and you may **not** edit it or re-hash the seal yourself (see Scope of Autonomy). Emit the contract-row-needed uncertainty and let `/pro.contract` add the rows and re-seal, then resume against the re-sealed rubric. Only when the contract is **unsealed** (no `.sha256`, or the seal carries the literal `UNSEALED` token) may the loop append the rows under the current sprint and commit the contract update directly.
 
 **Quality checks during implementation**:
 - Does the implementation satisfy each contract row's Browser Test? (Run them — don't infer from reading code.)
@@ -440,6 +446,8 @@ Output **exactly one** of these terminal tags as the last line of output:
 | `<pro-status>BLOCKED:<reason></pro-status>` | Stuck on a task — orchestrator decides whether to retry |
 | `<pro-status>ERROR:<message></pro-status>` | Unexpected error — orchestrator applies circuit breaker |
 | `<pro-status>MAX_ITERATIONS</pro-status>` | Safety limit reached — terminate loop |
+
+> **Headless JSON path — the tag must be the final line of the textual answer.** When this loop runs unattended via `pro-orchestrate.sh` with `--output-format json`, the orchestrator does **not** read your raw stdout — it parses the CLI's JSON result object and scrapes the `<pro-status>` tag out of the `.result` string field (the assistant's textual answer), defensively (python3, then a text scrape; no jq). So the tag must still be emitted as plain text in your answer **and still be the last line of that answer** — exactly as in the in-harness path. Do not move it into a tool call, a code fence the model might drop, or a trailing summary after it; if it is not the final line of `.result`, the orchestrator cannot derive a control signal and treats the iteration as `ERROR:*` (which counts toward the circuit breaker). One tag, last line, every time — text path and JSON path alike.
 
 ## Context Efficiency Guidelines
 

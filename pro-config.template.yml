@@ -88,6 +88,19 @@ evaluation:
   # Generator proposes scope + acceptance criteria; evaluator ratifies before coding
   sprint_contracts: true
 
+  # Distinct model for the EVALUATOR (generator/evaluator independence).
+  #   empty  → reuse the primary model with a forced skeptical preamble; the eval +
+  #            run-report carry a SHARED-MODEL disclosure (a self-grade caveat).
+  #   set    → a distinct grader model (recommended for production self-improving runs).
+  # Env override: SPECKIT_PRO_EVALUATOR_MODEL
+  evaluator_model: ""
+
+  # Documentation flag: when true, /pro.contract seals each rubric (sprint-<N>.sha256,
+  # committed) and /pro.evaluate recomputes the hash pre-grade — FAIL:rubric-mutated on
+  # mismatch, FAIL:rubric-unsealed when a seal is absent on an evaluation-enabled run.
+  # This is a tamper-detection seal, NOT a tool boundary (--allowedTools can't path-scope).
+  rubric_immutable: true
+
 # ── Context Reset Protocol ─────────────────────────────────────────────────────
 # Inspired by: Anthropic's finding that context resets outperform compaction for long runs
 #
@@ -269,6 +282,84 @@ subagent_model: ""  # e.g. "claude-sonnet-4.6"
 # Env override: SPECKIT_PRO_AGENT_CLI
 agent_cli: "copilot"
 
+# ── Headless Orchestration (unattended agent-CLI runs) ────────────────────────
+# How the orchestrator drives an agent CLI in non-interactive (--print) mode.
+#
+# IMPORTANT: every key below is HEADLESS-CLAUDE-ONLY. It is read ONLY when the
+# orchestrator runs an agent CLI that advertises the matching capability (claude
+# today). The default in-harness loop and the default agent_cli=copilot path
+# IGNORE this entire block — so adding it changes nothing about today's behavior.
+#
+# CLI mapping (verified against claude v2.1.116):
+#   permission_mode               → --permission-mode <mode>
+#   allowed_tools                 → --allowedTools "<space-or-comma-separated>"  (generator)
+#   evaluator_allowed_tools       → --allowedTools "<…>" for the EVALUATOR invocation (read-only)
+#   disallowed_tools              → --disallowedTools "<…>"  (omitted entirely when empty)
+#   dangerously_skip_permissions  → --dangerously-skip-permissions  (only when true)
+#   max_budget_usd                → --max-budget-usd <remaining>    (PER-INVOCATION flag; the
+#                                    orchestrator tracks a CUMULATIVE per-run total and passes
+#                                    the REMAINING budget each call, stopping at a BUDGET_STOP)
+#   fallback_model                → --fallback-model <model>        (only with --print; empty omits)
+#   output_format                 → --output-format <fmt>           (json; degrades to <pro-status> scrape)
+#   session_persistence: false    → --no-session-persistence
+#
+# Agent-definition markdown is injected via  --append-system-prompt "$(cat <file>)"  —
+# NEVER as a file-path argument. There is NO --system-prompt-file and NO --max-turns
+# in v2.1.116; do not add them. Session continuity uses --resume <session_id> captured
+# from the first call's JSON (run_id is a telemetry key, not a valid --session-id UUID).
+#
+# -- Self-improvement safety --
+# This block (with evaluation.* and reporting.{improvements,regression,probes,otel} below)
+# is the safety spine for the self-improving loop. A long-running agent that can edit code,
+# grade itself, AND rewrite its own lessons is a reward-hacking risk. The mitigations:
+#   • a read-only evaluator (evaluator_allowed_tools — no Edit/Write) that cannot patch the
+#     code it grades, optionally on a distinct model (evaluation.evaluator_model);
+#   • sealed, immutable sprint contracts (evaluation.rubric_immutable) so the rubric can't
+#     be loosened mid-run;
+#   • improvements recorded as human-promotable PROPOSALS, never auto-applied
+#     (reporting.improvements.proposals_mode), bounded + curated (max_entries);
+#   • a probe-set regression guard (reporting.probes) that withholds any self-applied change
+#     if a committed known-bad fixture would start passing.
+# None of this is on the critical path by default — it activates only on the opt-in
+# headless-claude self-improvement path; the default pipeline is byte-for-byte unchanged.
+orchestration:
+  # → --permission-mode (acceptEdits|auto|bypassPermissions|default|dontAsk|plan).
+  # acceptEdits lets in-task edits proceed unattended (no TTY in --print, so an
+  # out-of-boundary tool is auto-denied, not a hang). dontAsk = strictest non-interactive.
+  permission_mode: "acceptEdits"
+
+  # → --allowedTools for the GENERATOR. Space- or comma-separated; supports scoped
+  # patterns like "Bash(git *)". Tools outside this set are denied in --print mode.
+  allowed_tools: "Read Edit Write Bash(git *) Grep Glob"
+
+  # → --allowedTools for the EVALUATOR invocation. READ-ONLY by design (no Edit/Write):
+  # a grader that can edit the code it grades violates the generator/evaluator split.
+  evaluator_allowed_tools: "Read Grep Glob"
+
+  # → --disallowedTools. Omitted entirely from the command line when empty.
+  disallowed_tools: ""
+
+  # → --dangerously-skip-permissions. Removes ALL tool boundaries — trusted,
+  # fully-unattended repos only. Leave false unless you know you need it.
+  dangerously_skip_permissions: false
+
+  # Per-RUN cumulative ceiling in USD. The CLI's --max-budget-usd is PER-INVOCATION,
+  # so the orchestrator accumulates RUN_COST_USD across iterations and passes the
+  # REMAINING budget to each call, stopping + checkpointing (BUDGET_STOP) when the
+  # cumulative total crosses this cap. null/empty = unlimited (must be explicit).
+  max_budget_usd: 10.00
+
+  # → --fallback-model (used only with --print; empty omits the flag).
+  fallback_model: ""
+
+  # → --output-format. "json" is parsed python3-first (text <pro-status> scrape fallback,
+  # no jq). Degrades to <pro-status> text scrape when the CLI lacks the json capability.
+  output_format: "json"
+
+  # false → --no-session-persistence. true keeps the session so --resume works across
+  # iterations (continuity is via the JSON session_id, not the telemetry run_id).
+  session_persistence: true
+
 # ── Checkpoint Settings ───────────────────────────────────────────────────────
 checkpoint:
   # Prefix for auto-generated commit messages
@@ -442,10 +533,86 @@ parallel:
     local_prep: false
     deepen: false
     prime: false
+    # implement: fan out independent [P] tasks in the /pro.go implement loop across
+    # concurrent in-harness sub-agents (instead of one work-unit at a time). Only
+    # [P]-marked, file-disjoint tasks fan out; everything else stays serial. OFF by
+    # default → byte-for-byte today's sequential loop until you opt in.
+    implement: false
 
   # Telemetry — one JSONL line per worker event, aggregated by /pro.local-metrics.
   telemetry: true
   metrics_file: ".knowledge/metrics/fanout-metrics.jsonl"
+
+# ── Run Reporting & Self-Improvement ──────────────────────────────────────────
+# Makes every /pro.go run measurable and turns the pipeline into a harness that
+# improves over time. Phase 0 stamps a run-start marker + reads accumulated
+# learnings; Phase 8 writes a per-run report, appends a machine summary to
+# runs.jsonl, and records curated learnings the NEXT run reads. Driven by
+# scripts/bash/pro-report.sh — never aborts the pipeline (degrades to partial).
+reporting:
+  # Master switch. false = Phase 0 marker + Phase 8 report/self-improve are skipped.
+  enabled: true
+
+  # Write specs/<feature>/run-report.md at Phase 8 (duration, files/lines/commits,
+  # tasks, iterations, parallel workers, eval verdict+score, where-to-improve notes).
+  run_report: true
+
+  # Cross-run machine log (one JSON line per finished run). Aggregated by
+  # `pro-report.sh aggregate` and surfaced in /pro.local-metrics. Gitignored.
+  runs_log: ".knowledge/metrics/runs.jsonl"
+
+  # Close the loop: at Phase 8 append curated, actionable learnings here; at Phase 0
+  # read them back and apply. This file IS the cross-run memory — committed (not
+  # gitignored) so the whole team's runs compound. false = skip the curation step.
+  self_improve: true
+  improvements_file: ".knowledge/improvements.md"
+
+  # ── Improvements ledger as PROPOSALS (reward-hacking guard) ─────────────────
+  # improvements.md is a 4-section ledger (Promoted / Proposed / Archived / Pruned).
+  # Phase 0 applies Promoted ONLY; Phase 8b appends Proposed (never auto-promoted);
+  # Phase 8d curation enforces the max_entries bound (archives lowest-value, prunes
+  # entries a later run disproved). Lessons are human-promotable, never auto-applied.
+  improvements:
+    max_entries: 50               # bound on Promoted+Proposed; Phase 8d archives beyond this
+    proposals_mode: "propose"     # lessons recorded as proposals only — never auto-applied
+
+  # ── Eval-score regression flag ──────────────────────────────────────────────
+  # `pro-report.sh aggregate` flags a run when its eval score drops below the trailing
+  # baseline. One namespace: reporting.regression.*. Defaults match evaluation.threshold.
+  regression:
+    window: 5                     # trailing scored-run window for the baseline mean
+    margin: 10                    # points below the mean that trip the flag
+    pass_threshold: 70            # absolute floor (mirrors evaluation.threshold)
+    min_prior_scored: 3           # below this many prior scored runs → no flag (thin baseline)
+
+  # ── OpenTelemetry export (opt-in) ───────────────────────────────────────────
+  # When enabled, `finish` invokes pro-otel-emit.sh to POST one per-run root span +
+  # per-phase child spans + per-run metrics (GenAI semantic conventions) over OTLP/HTTP
+  # JSON. Carries claude.session_id so it joins Claude Code's own telemetry stream.
+  # OFF by default — no always-on dependency. Export failures are logged, never fatal.
+  otel:
+    enabled: false                # opt-in OTLP/HTTP JSON export; OFF by default
+    endpoint: ""                  # operator OTLP/HTTP base URL, e.g. http://localhost:4318
+    protocol: "http/protobuf"     # documented; emitter sends OTLP/HTTP JSON (no protobuf dep)
+    headers: ""                   # comma-separated key=value (e.g. authorization=Bearer xxx)
+    service_name: "speckit-pro"
+    timeout_seconds: 5            # curl --max-time; on timeout the export is logged + skipped
+
+  # ── Probe-set regression guard (self-apply gate) ────────────────────────────
+  # Before any self-applied change, pro-improve-guard.sh runs committed fixtures under
+  # <dir>/{known-good,known-bad}/<case>/ through the evaluator: APPLY-OK iff all
+  # known-good ACCEPT and no known-bad ACCEPT, else BLOCK. No-op when no self-apply is
+  # attempted; can NEVER abort a pipeline phase. Results are gitignored per-run.
+  probes:
+    dir: ".knowledge/probes"                       # committed fixtures (human-authored config)
+    guard_enabled: true                            # gate self-applied changes
+    fail_closed: true                              # missing/empty probes → BLOCK self-apply
+    drift_alert: true                              # known-bad flips REJECT→ACCEPT → alarm + withhold
+    results_subdir: ".knowledge/metrics/probes"    # gitignored per-run probe outcomes (<run_id>.jsonl)
+    bootstrap: true                                # seed ≥1 known-good + ≥1 known-bad on first guard run
+
+  # Print `pro-report.sh aggregate` (trend dashboard + recommendations) at Phase 8.
+  aggregate_on_finish: true
 
 # ── Notification Settings ─────────────────────────────────────────────────────
 # (Future: webhook/notification integration)
