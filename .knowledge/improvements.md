@@ -64,6 +64,16 @@ anomalies needs no new entry — a stale learning is worse than none.
 
 <!-- Phase 8 appends here. NOT applied at Phase 0 until a human promotes into ## Promoted. Newest first. -->
 
+- [2026-06-10] (003-autonomy-reliability-hardening, eval PASS 87) status: proposed **Hunt default-branch fallbacks that return success — the worst silent failure is a catch-all that treats unknown states as OK.**
+  Why: the orchestrator's evaluator-verdict fallback was `*) … treating as PASS; return 0` — a malformed/ERROR verdict shipped unverified code; three audits described it as a mere "implicit non-pass" until the code was read.
+  Apply: when auditing failure handling, grep every `case` catch-all and `except`/`|| true` default for a success return; classify unknown states as explicit failures with a recorded reason.
+  Evidence: pro-orchestrate.sh handle_eval_result (pre-fix ~line 820) vs the v1.23 fix; run run-20260610-042941-065f.  Promoted-by: —  Disproven-by: —
+
+- [2026-06-10] (003-autonomy-reliability-hardening, eval PASS 87) status: proposed **Write pattern assertions per defect CLASS (repo-wide grep), not per file — single-file contract rows let sibling defects survive.**
+  Why: sprint-3's row scoped `git add .` removal to pro-orchestrate.sh; the identical pattern lived on in pro-checkpoint.sh and the pro.go.md protocol and was only caught by the evaluator's repo-wide sweep, forcing a revision pass.
+  Apply: when a contract row bans a code pattern, make its check `grep -r` the whole shipped surface (scripts/ + commands/), and name the defect class in the row, not the file.
+  Evidence: check_checkpoint_patterns widened post-eval; evaluation sprint-7 finding #1.  Promoted-by: —  Disproven-by: —
+
 - [2026-06-08] (002-self-improving-orchestration, eval PASS 90) **When implementation fans out across disjoint-file workers, add a dedicated cross-worker INTEGRATION review lens — the seams between independently-built files are where the real bugs hide.**
   Why: each of the 9 workers passed its own frozen contract, yet the seams between them held the worst bugs — `report_phase` emitted a different positional arg order than `cmd_phase` parsed (silent per-phase telemetry loss), and the OTel emitter read `per_phase_durations_s` as a dict while the reporter wrote a list (zero child spans). Neither shows up reviewing one file in isolation.
   Apply: in any multi-file fan-out, make one review lens verify producer↔consumer contracts end-to-end (emitted flags vs accepted flags; written JSON shape vs read shape; cross-file path agreement) and assert observable counts (N phases → N spans), not just per-file correctness.
