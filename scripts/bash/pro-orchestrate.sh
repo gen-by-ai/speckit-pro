@@ -817,8 +817,16 @@ handle_eval_result() {
       return 2  # hard fail
       ;;
     *)
-      log_warn "Evaluator returned unknown verdict '$verdict' — treating as PASS"
-      return 0
+      # FR-011: an absent/unknown/ERROR verdict is an explicit failure outcome —
+      # unverified code must never pass by default (the old behavior here was
+      # "treating as PASS", which shipped whatever the evaluator failed to grade).
+      log_error "Evaluator output invalid — verdict '$verdict' is not PASS/NEEDS_REVISION/FAIL"
+      log_error "Treating as FAIL:evaluator-output-invalid (unverified code never passes by default)"
+      [[ -f "$PRO_REPORT" ]] && bash "$PRO_REPORT" event decision "${RUN_ID:--}" \
+        evaluator_verdict fail-invalid-verdict "verdict='${verdict}' tag='$(printf '%s' "$eval_tag" | head -c 120)'" \
+        >/dev/null 2>&1 || true
+      update_session "evaluate" "invalid" "Sprint $sprint: evaluator output invalid ($eval_tag)"
+      return 2  # hard fail — same handling as FAIL, with its own recorded reason
       ;;
   esac
 }
@@ -1168,7 +1176,8 @@ finish_self_stamped() {
   [[ "${SELF_STAMPED:-0}" -eq 1 && -f "$PRO_REPORT" ]] || return 0
   SELF_STAMPED=0
   bash "$PRO_REPORT" finish --feature "$FEATURE_NAME" --run-id "$RUN_ID" \
-    --max-iterations "$MAX_ITERATIONS" --no-stdout >/dev/null 2>&1 || true
+    --max-iterations "$MAX_ITERATIONS" --progress-file "$PROGRESS_FILE" \
+    --no-stdout >/dev/null 2>&1 || true
 }
 trap finish_self_stamped EXIT
 trap 'echo ""; log_warn "Interrupted by user. Run /speckit.pro.resume to continue."; exit 130' INT

@@ -29,6 +29,18 @@ gates:
   after_analyze: false     # Auto-proceed if analyze passes
   after_implement: false   # Auto-proceed (run /speckit.pro.status to review)
 
+  # ── Unattended mode (FR-014) ────────────────────────────────────────────────
+  # When true, every human decision point applies its configured default below
+  # instead of blocking; each auto-applied default is recorded (run-report
+  # "Decisions" section + session.md). Interactive behavior unchanged while false.
+  unattended: false
+  unattended_defaults:
+    run_plan: proceed          # the "Proceed? (yes/no)" run-plan prompt
+    phase_gate: continue       # after_specify / after_plan / ... review pauses
+    overlap: start-fresh       # pre-flight existing-feature overlap prompt
+    critical_analysis: stop    # CRITICAL analyze findings → conservative stop with reason
+    contract_amendment: auto   # mid-loop sealed-contract blocker → /pro.contract --amend
+
 # ── Quality Settings ─────────────────────────────────────────────────────────
 quality:
   # Run /speckit.clarify after /speckit.specify
@@ -74,8 +86,9 @@ loop:
 # - Gives the generator up to max_revisions revision passes to fix issues
 evaluation:
   # Enable the generator/evaluator split
-  # Recommended: true for complex / production features; false for rapid prototyping
-  enabled: false
+  # true is the runtime-effective extension default (kept aligned — see
+  # scripts/local/config_defaults_check.py); set false for rapid prototyping
+  enabled: true
 
   # Minimum score (0-100) for PASS. Higher = stricter.
   # 70 = "mostly works", 80 = production-ready, 90 = high-confidence

@@ -118,6 +118,8 @@ Before generating a new spec, check whether the same work is already in flight. 
    - `n` → continue to the run plan below.
    - `a` → abort.
 
+   **Unattended**: when `gates.unattended: true`, apply `unattended_defaults.overlap` (default `start-fresh` → same as `n`) — print `[Pro] unattended: overlap → start-fresh`, record `event decision - overlap start-fresh "<matched features>"`, and continue. Exception: a match in phase `in-loop` is resumed (`/pro.pickup`) rather than duplicated — resuming live work is always the conservative action.
+
 6. **No matches** — silently continue to the run plan. Print one line: `[Pro] No overlapping features found — starting fresh.`
 
 ## Run Plan
@@ -165,6 +167,8 @@ Display the run plan and ask "Proceed? (yes/no)":
 └──────────────────────────────────────────────────────────────┘
 ```
 
+**Unattended (FR-014)**: when `gates.unattended: true`, do not ask — apply `gates.unattended_defaults.run_plan` (default `proceed`), print `[Pro] unattended: run_plan → proceed`, record it (`bash "$PRO_SCRIPTS/pro-report.sh" event decision "$RUN_ID" run_plan proceed "run-plan auto-accepted"`), append to session.md, and continue.
+
 If the user says no: `Pipeline cancelled. Run /pro.go <description> to start again.`
 
 > **Tip**: If you only want to *implement* an existing spec (not regenerate it), use `/pro.pickup <feature-dir>` instead — it skips planning and starts the loop directly.
@@ -182,7 +186,7 @@ For each phase: **bracket → announce → execute → gate → update session**
   Use a stable `<phase-name>` token per phase (lowercase, no spaces) so start/stop pair up. An unpaired start contributes 0 to that phase's duration (never a fabricated number) — so still emit `stop` even if the phase aborted, when you can.
 - **Announce**: `[Pro] Phase N — running /speckit.<cmd>`
 - **Execute**: run the native SpecKit command with `EXECUTE_COMMAND`
-- **Gate** (if `true`): ask `⏸ Review above. Press Enter to continue or type 'abort'.` If abort: print the feature directory for resuming with `/pro.resume` and stop.
+- **Gate** (if `true`): ask `⏸ Review above. Press Enter to continue or type 'abort'.` If abort: print the feature directory for resuming with `/pro.resume` and stop. **Unattended**: when `gates.unattended: true`, apply `unattended_defaults.phase_gate` (default `continue`) instead of asking — print `[Pro] unattended: phase_gate(<phase>) → continue`, record `event decision <run-id> phase_gate continue "<phase>"`, append to session.md.
 - **Gate** (if `false`): print `[Pro] Auto-continuing...`
 - **Update session**: append a one-line entry to `<FEATURE_DIR>/session.md`
 
@@ -373,6 +377,8 @@ If analyze reports CRITICAL issues, pause regardless of gate setting:
 - `yes` → pause for human to fix
 - `no` → abort pipeline
 - `force` → continue despite issues (log a warning to session.md)
+
+**Unattended**: when `gates.unattended: true`, apply `unattended_defaults.critical_analysis` (default `stop` — the conservative action: blind continuation past CRITICAL findings is never an unattended default). Print `[Pro] unattended: critical_analysis → stop`, record `event decision <run-id> critical_analysis stop "<finding summary>"`, write the findings to session.md, and stop the pipeline with the resume hint (`/pro.resume` continues after a human resolves the findings).
 
 ### Phase 5b — Initializer Setup
 
@@ -572,7 +578,11 @@ Two execution modes. The mode is chosen per work-unit; default is serial (byte-f
 **Parallel path (opt-in — real multi-agent fan-out).** This is the engine that was previously only wired into `/pro.scan` (analyze pre-pass); here it parallelizes *implementation*:
 
 1. Collect the disjoint `[P]` tasks in this work-unit into a worker set. Determine the worker count: `parallel.workers.in_harness` else `min(16, cores−2)`; clamp the worker set to that ceiling (queue the rest).
-2. **Dispatch one sub-agent per `[P]` task, concurrently** (use the Agent tool — same in-harness substrate as `/pro.scan` step 2). Give each sub-agent: the task line + its acceptance criteria from the sprint contract, the relevant task-packet (`task-packets/TASK-<id>-*.md` if present), and `AGENT.md`. Instruct each to implement **only its task's files**, verify acceptance criteria, and return a structured result (files written, tests run, status, any `<pro-uncertainty>`). Because the file sets are disjoint, the shared working tree never conflicts. (If you cannot guarantee disjointness, dispatch with worktree isolation instead and merge after — but prefer disjoint `[P]` tasks, which is exactly what the marker promises.)
+2. **Dispatch one sub-agent per `[P]` task, concurrently** (use the Agent tool — same in-harness substrate as `/pro.scan` step 2). Give each sub-agent: the task line + its acceptance criteria from the sprint contract, the relevant task-packet (`task-packets/TASK-<id>-*.md` if present), and `AGENT.md`. Instruct each to implement **only its task's files**, verify acceptance criteria, and return **only** a JSON object per the Worker Result Envelope (`specs/003-autonomy-reliability-hardening/contracts/worker-result.schema.json` — shipped with Pro):
+
+```json
+{"task_id": "T012", "status": "pass|fail|timeout", "files": ["..."], "tests_run": ["..."], "uncertainties": ["..."], "notes": "..."}
+``` Because the file sets are disjoint, the shared working tree never conflicts. (If you cannot guarantee disjointness, dispatch with worktree isolation instead and merge after — but prefer disjoint `[P]` tasks, which is exactly what the marker promises.)
 3. **Log telemetry** for each worker so the run-report and `/pro.local-metrics` can measure the fan-out — reuse the engine's logger:
    ```bash
    bash "$PRO_SCRIPTS/pro-report.sh" event dispatch  "$RUN_ID" "<task-id>" in-harness
@@ -584,7 +594,9 @@ Two execution modes. The mode is chosen per work-unit; default is serial (byte-f
    ```bash
    bash "$PRO_SCRIPTS/pro-report.sh" call "$RUN_ID" --phase implement --status continue --cb-trip
    ```
-4. **Merge**: after all workers in the set return, mark each completed task `- [x]` in `tasks.md`, fold every sub-agent's file list + decisions + uncertainties into this iteration's progress entry, and continue. A failed/timed-out worker leaves its task `- [ ]` for the next iteration (never silently dropped).
+4. **Merge (FR-012)**: after all workers in the set return, parse each result as the JSON envelope. A task is marked `- [x]` in `tasks.md` **iff** its envelope parsed AND `status == "pass"`. An unparseable result is treated as `status: "fail"` with the parse error recorded in the progress entry. `fail`/`timeout` leave the task `- [ ]` with the outcome recorded (never silently dropped, never conflated with success). Fold every worker's `files` + `uncertainties` into this iteration's progress entry.
+
+   **Circuit-breaker aftermath**: the breaker stops *new* dispatches only — already-incomplete tasks stay `- [ ]`. The next iteration retries them **serially**; if a task's serial retry also fails, emit `BLOCKED:<task-id>` in the progress entry and move on (never churn the same task to max-iterations).
 5. Any remaining **non-`[P]` (sequential) tasks** in the work-unit run on the serial path above, after the parallel set merges.
 
 Follow the Scope of Autonomy rules from `pro.loop.md` (serial OR parallel): never delete files, never `git push`, never run `--force` commands. Signal underspecified requirements with `<pro-uncertainty>…</pro-uncertainty>` in the progress entry.
@@ -698,7 +710,17 @@ EXECUTE_COMMAND: /pro.local-review
 EXECUTE_COMMAND: /pro.evaluate
 ```
 
-Parse the evaluator's `<pro-eval>` tag from stdout. Proceed to 7d only if the verdict is **PASS**.
+Parse the evaluator's `<pro-eval>` tag from stdout: take the **last** tag in the output and extract the verdict token before the first `:`.
+
+**Malformed-verdict rule (FR-011)**: if no `<pro-eval>` tag is present, or the verdict token is not exactly one of `PASS`, `NEEDS_REVISION`, `FAIL` — classify the sprint as **`FAIL:evaluator-output-invalid`**. Record it and skip downstream sync *with the reason logged*:
+
+```bash
+bash "$PRO_SCRIPTS/pro-report.sh" event decision "$RUN_ID" evaluator_verdict fail-invalid-verdict "<what was malformed/absent>"
+```
+
+Print `[Pro] Evaluator output invalid — treating as FAIL:evaluator-output-invalid (unverified code never passes by default).` An invalid verdict is never an implicit non-pass and NEVER an implicit pass.
+
+Proceed to 7d only if the verdict is **PASS**.
 
 **7d. Knowledge sync** — skip if `knowledge.enabled: false` or `knowledge.sync_after_evaluate: false`. Otherwise (PASS required):
 
@@ -746,8 +768,10 @@ This is what makes the run **trackable** and the harness **self-improving**. Ski
 bash "$PRO_SCRIPTS/pro-report.sh" finish \
   --feature "<feature-slug>" --run-id "$RUN_ID" \
   --eval-verdict "<verdict from Phase 7c>" --eval-score "<score from Phase 7c>" \
-  --iterations "<loop iterations used>" --max-iterations "<loop.max_iterations>"
+  --iterations "<loop iterations used>" --max-iterations "<loop.max_iterations>" \
+  --progress-file ".knowledge/features/<feature-slug>/progress.md"
 ```
+The `--progress-file` flag makes `finish` extract every `<pro-uncertainty>` block into `specs/<feature>/uncertainties.md` (FR-015) — the digest the operator reviews instead of grepping progress.md.
 This writes `specs/<feature>/run-report.md` and prints it, and appends a one-line summary to `.knowledge/metrics/runs.jsonl`. The report answers the three questions the operator asked for: **how long** (wall-clock), **what it produced** (files +/-, lines +/-, commits, tasks, iterations, parallel workers, local-model calls), and **how it went / where to improve** (eval verdict + score, parallelization factor, heuristic notes).
 
 **8b. Curate durable learnings as *proposals* (the closed loop).** The report's "Where to improve" section is auto-generated heuristics. Now add the *qualitative* lesson that only you (having run the pipeline) can write, so the **next** `/pro.go` sees it at Phase 0. Skip if `reporting.self_improve: false`.

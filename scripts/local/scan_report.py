@@ -110,7 +110,12 @@ def atomic_write(path, text):
 
 
 def with_lock(lock_path, fn, tries=50, wait=0.1):
-    """Best-effort per-repo lock so two concurrent scans don't clobber latest.md."""
+    """Per-repo lock so two concurrent scans don't clobber latest.md.
+
+    Fail-loud on contention (FR-008): a lock that proceeds on timeout provides
+    false assurance exactly when protection is needed. The caller records the
+    failure in the Coverage Ledger; the pipeline degrades, the file survives.
+    """
     os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
     acquired = False
     for _ in range(tries):
@@ -122,14 +127,24 @@ def with_lock(lock_path, fn, tries=50, wait=0.1):
             break
         except FileExistsError:
             time.sleep(wait)
+    if not acquired:
+        try:
+            holder = open(lock_path).read().strip()
+        except OSError:
+            holder = "unknown"
+        print(
+            "[scan-report] ERROR: lock %s held (owner PID %s) after %.1fs — "
+            "refusing to write unlocked" % (lock_path, holder, tries * wait),
+            file=sys.stderr,
+        )
+        sys.exit(75)  # EX_TEMPFAIL: contention, retryable
     try:
         return fn()
     finally:
-        if acquired:
-            try:
-                os.unlink(lock_path)
-            except OSError:
-                pass
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
 
 
 def main():

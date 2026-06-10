@@ -93,9 +93,20 @@ Then branch on the seal:
 - **Seal file absent** while `evaluation.enabled` AND `sprint_contracts` are both true → fail-closed for tamper: emit `<pro-eval>FAIL:rubric-unsealed</pro-eval>` and stop. A missing seal on a run that is supposed to seal contracts means the seal was deleted or never committed — treat it as tampering, not as a capability gap. (If `evaluation` or `sprint_contracts` is off, there is no seal expectation — skip this gate.)
 - **Seal == `UNSEALED`** (the contract was honestly sealed with no hashing tool available at the time) → log a WARN to the evaluation prose ("rubric seal is UNSEALED — hashing tool was unavailable at contract time; integrity not cryptographically verifiable") and **proceed** to grading. This is a known, disclosed gap, not tamper.
 - **Recomputed hash != the value in `SEAL`** → the contract changed after it was sealed: emit `<pro-eval>FAIL:rubric-mutated:sprint-<N></pro-eval>` and stop. Do not grade. This routes to operator review with no revision retry — a reward-hacking loop must not be able to "fix" the seal by re-running.
-- **Recomputed hash == the value in `SEAL`** → the rubric is intact; proceed to Step 2.
+- **Recomputed hash == the value in `SEAL`** → the rubric is intact; proceed (to Step 1.6 if the contract was amended mid-run, otherwise Step 2).
+
+**Amended contracts.** If `${CONTRACT_FILE%.md}.sha256.history` exists, the contract was amended mid-run via `/pro.contract --amend` — each amendment appends the superseded seal to the history file and re-seals. None of the branches above change: the **current** seal must still verify against the current contract, and a mismatch is still `FAIL:rubric-mutated`. But a verified seal on an amended contract is not the end of the story — proceed to Step 1.6 and audit what the amendments did before grading.
 
 This gate runs before scoring and before any browser test. A tampered or missing rubric is a categorical failure that bypasses the rest of the evaluation.
+
+### Step 1.6 — Amendment audit (when the contract was amended mid-run)
+
+Run this step when `${CONTRACT_FILE%.md}.sha256.history` exists **or** any contract row contains `amended-mid-run`. Otherwise skip it entirely. The amend path exists so an unattended loop can ADD scope it discovered mid-run — it must never become a side door for loosening the bar.
+
+1. **Enumerate amended rows.** Find every contract row whose text contains `amended-mid-run` and list them in the evaluation output (`<knowledge-feature-dir>/evaluations/sprint-<N>.md`) under an **"Amended rows"** heading: row id, a one-line summary of the criterion, and who amended it — `unattended` or `operator`, straight from the marker.
+2. **Verify amendments only ADDED scope.** Reconstruct the pre-amendment contract if cheaply possible — the seal history proves a prior version existed, and if the feature dir has git history for the contract file, diff it (`git log --follow -- "${CONTRACT_FILE}"`, then diff the pre-amendment revision against the current file). Check that no pre-existing row was edited, deleted, severity-lowered, or had its Expected Behavior relaxed. Legitimate amendments append new rows; they touch nothing that was already sealed.
+3. **Any pre-existing criterion weakened** → emit `<pro-eval>FAIL:rubric-weakened:sprint-<N></pro-eval>` and stop. Do not grade. This is the same severity class as `rubric-mutated` — a "weakened by amendment" rubric is reward-hacking with a paper trail — and it routes to operator review with no revision retry.
+4. **Reconstruction not possible** (no git history for the contract file) → say so explicitly in the evaluation output and grade the amended rows as normal contract rows, but flag `amendment-unverifiable` in the notes. Never silently skip the audit.
 
 ### Step 2 — Load the Sprint Contract
 
@@ -111,7 +122,7 @@ bash <knowledge-feature-dir>/init.sh   # start the dev server
 
 If the app fails to start, mark all UI/API rows as FAIL with reason `app-not-startable` and emit `<pro-eval>FAIL:app-not-startable</pro-eval>` — do not proceed to static review. A sprint that broke the app is not graded on code.
 
-Then run the browser-test suite. **The contract's Browser Test column is the source of truth — you do not invent your own probes.** Run every script the contract lists:
+Then run the browser-test suite. **The contract's Browser Test column is the source of truth — you do not invent your own probes.** Run every script the contract lists. Before executing each script, verify it actually exists on disk — a typo'd path or a never-written script must not read as a generic test failure (or worse, slip through):
 
 ```bash
 SPEC_DIR=<resolved spec dir>
@@ -122,6 +133,11 @@ mkdir -p "$(dirname "${SUITE_LOG}")"
 THIS_SPRINT_FAILED=0
 while IFS= read -r script; do
   echo "──────── $(basename "${script}") ────────" | tee -a "${SUITE_LOG}"
+  if [ ! -f "${script}" ]; then
+    echo "FAIL:test-script-not-found:${script}" | tee -a "${SUITE_LOG}"
+    THIS_SPRINT_FAILED=$((THIS_SPRINT_FAILED + 1))
+    continue
+  fi
   if bash "${script}" 2>&1 | tee -a "${SUITE_LOG}"; then
     echo "PASS: ${script}" | tee -a "${SUITE_LOG}"
   else
@@ -132,6 +148,8 @@ done < <(awk -F'|' '/browser-tests\//{match($0, /browser-tests\/[^[:space:]\`]+\
 ```
 
 Any failure in this-sprint scripts → at least NEEDS_REVISION. Any failure of a CRITICAL row → outright FAIL unless the row is in the contract's Edge-Case Waivers section.
+
+A missing script is reported as `test-script-not-found:<path>` — distinct from a script that runs and fails — so the operator knows whether to write the test or fix the code. It still counts as a failed CRITICAL row (a missing test is not a free pass), but the suite continues to the next script rather than aborting, so one bad path cannot mask the results of the rest of the suite.
 
 ### Step 3b — Regression Carry-Forward (mandatory)
 
@@ -314,8 +332,10 @@ Can the **next iteration safely build on this code**? Penalise: deep magic, undo
 |---|---|
 | Rubric seal mismatch (Step 1.5) | `FAIL:rubric-mutated:sprint-<N>` |
 | Rubric seal absent w/ contracts enabled (Step 1.5) | `FAIL:rubric-unsealed` |
+| Mid-run amendment weakened a pre-existing criterion (Step 1.6) | `FAIL:rubric-weakened:sprint-<N>` — same severity class as rubric-mutated |
 | App fails to start (Step 3) | `FAIL:app-not-startable` |
 | Any CRITICAL Browser Test FAIL (Step 3) | `FAIL:critical-browser-test-failed:<script>` |
+| Contract-listed Browser Test script missing from disk (Step 3) | `FAIL:test-script-not-found:<path>` — counted as a failed CRITICAL row, distinct from a test that runs and fails |
 | Any regression-carryforward FAIL (Step 3b) | `NEEDS_REVISION:regression-carryforward-failed:<count>` |
 | Stub/no-op detected in non-test file (Step 4a) | `FAIL:stub-detected:<file>:<line>` |
 | Dangling new file (Step 4b) | `NEEDS_REVISION:dangling-file:<path>` |

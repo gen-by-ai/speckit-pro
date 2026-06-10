@@ -236,6 +236,130 @@ check_checkpoint_patterns() { # row 3.5 (static assertions)
   grep -q ":(exclude).knowledge/metrics" "$F" || return 1
 }
 
+# ── Sprint 4 — US3 state integrity (contract rows 4.0–4.2) ──────────────────
+
+check_lock_failloud() { # rows 4.0 + 4.1
+  local D="$TMP_BASE/lock"
+  rm -rf "$D"; mkdir -p "$D"
+  python3 - "$ROOT/scripts/local" "$D" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import scan_report
+d = sys.argv[2]
+lock = os.path.join(d, ".lk")
+target = os.path.join(d, "out.txt")
+
+# Positive arm (row 4.1): free lock → fn runs, lock released after.
+ran = []
+scan_report.with_lock(lock, lambda: ran.append(1), tries=3, wait=0.01)
+assert ran == [1], "fn must run when lock is free"
+assert not os.path.exists(lock), "lock must be released"
+
+# Negative arm (row 4.0): held lock → SystemExit non-zero, fn NEVER called, target untouched.
+open(target, "w").write("original")
+fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, b"99999"); os.close(fd)
+called = []
+try:
+    scan_report.with_lock(lock, lambda: (called.append(1), open(target, "w").write("CLOBBERED")), tries=3, wait=0.01)
+    raise AssertionError("must exit non-zero on contention")
+except SystemExit as e:
+    assert e.code not in (0, None), "exit code must be non-zero"
+assert called == [], "fn must NOT run unlocked"
+assert open(target).read() == "original", "target must be untouched"
+assert os.path.exists(lock), "foreign lock must not be deleted"
+PY
+}
+
+check_fanout_concurrent() { # row 4.2
+  local D="$TMP_BASE/fan" i
+  rm -rf "$D"; mkdir -p "$D"
+  for i in 1 2 3 4 5 6 7 8; do
+    ( . "$ROOT/scripts/bash/lib/pro-fanout-common.sh" 2>/dev/null
+      fanout_telemetry "$D/m.jsonl" dispatch "run-x" "p$i" in-harness ) &
+  done
+  wait
+  python3 - "$D/m.jsonl" <<'PY'
+import json, sys
+lines = [l for l in open(sys.argv[1]) if l.strip()]
+assert len(lines) == 8, "expected 8 lines, got %d" % len(lines)
+for l in lines:
+    json.loads(l)  # every line must parse — no interleaving
+PY
+}
+
+# ── Sprint 5 — US4 drift checker (contract rows 5.0–5.2) ────────────────────
+
+check_drift_checker() {
+  local CHK="$ROOT/scripts/local/config_defaults_check.py"
+  local D="$TMP_BASE/drift"
+  rm -rf "$D"; mkdir -p "$D"
+  # Row 5.0: zero mismatches on the real repo, both exit codes 0.
+  python3 "$CHK" >/dev/null 2>&1 || return 1
+  python3 "$CHK" --strict >/dev/null 2>&1 || return 1
+  python3 "$CHK" | grep -q '^drift: 0 mismatch' || return 1
+  # Row 5.1: corrupt one default in a temp copy → mismatch listed, --strict exits 1.
+  sed 's/^\([[:space:]]*\)enabled: true[[:space:]]*# generator\/evaluator split.*/\1enabled: false/' \
+    "$ROOT/extension.yml" > "$D/ext.yml"
+  python3 "$CHK" --extension "$D/ext.yml" --template "$ROOT/pro-config.template.yml" \
+    | grep -q '^MISMATCH evaluation.enabled' || return 1
+  python3 "$CHK" --strict --extension "$D/ext.yml" --template "$ROOT/pro-config.template.yml" >/dev/null 2>&1
+  [[ $? -eq 1 ]] || return 1
+  # Row 5.2: unparseable source → UNVERIFIED, never "no drift"; --strict non-zero.
+  printf 'broken:\n\t- tab indented garbage\n' > "$D/bad.yml"
+  local out
+  out="$(python3 "$CHK" --extension "$D/bad.yml" --template "$ROOT/pro-config.template.yml" 2>&1)"
+  printf '%s\n' "$out" | grep -q 'PARSE-FAILURE' || return 1
+  printf '%s\n' "$out" | grep -q 'UNVERIFIED'    || return 1
+  ! printf '%s\n' "$out" | grep -q '^drift: 0 mismatch' || return 1
+  python3 "$CHK" --strict --extension "$D/bad.yml" --template "$ROOT/pro-config.template.yml" >/dev/null 2>&1
+  [[ $? -eq 1 ]]
+}
+
+# ── Sprint 6 — US5 unattended (contract rows 6.1–6.2) ───────────────────────
+
+check_unattended_defaults() { # row 6.1
+  local k
+  for k in "unattended:" "run_plan: proceed" "phase_gate: continue" "overlap: start-fresh" \
+           "critical_analysis: stop" "contract_amendment: auto"; do
+    grep -q "$k" "$ROOT/extension.yml"            || return 1
+    grep -q "$k" "$ROOT/pro-config.template.yml"  || return 1
+  done
+  # value parity over shared keys is enforced by check_drift_checker (0 mismatches)
+  python3 "$ROOT/scripts/local/config_defaults_check.py" --strict >/dev/null 2>&1
+}
+
+check_uncertainty_digest() { # row 6.2
+  local M; M="$(new_metrics_dir uncd)"
+  local D="$TMP_BASE/uncfix"
+  rm -rf "$D"; mkdir -p "$D/specs/009-unc"
+  printf -- '- [ ] T001 x\n' > "$D/specs/009-unc/tasks.md"
+  cat > "$D/prog.md" <<'FIX'
+# Progress
+## Iteration 1 — ts
+work
+<pro-uncertainty>Is the retry count 3 or 5? Spec is silent.</pro-uncertainty>
+more
+## Iteration 2 — ts
+<pro-uncertainty>Auth scope unclear for admin route.</pro-uncertainty>
+FIX
+  local rid
+  rid="$(SPECKIT_PRO_METRICS_DIR="$M" bash "$REPORT" start --feature 009-unc 2>/dev/null)" || return 1
+  ( cd "$D" && SPECKIT_PRO_METRICS_DIR="$M" bash "$REPORT" finish --run-id "$rid" --feature 009-unc \
+      --progress-file "$D/prog.md" --no-stdout >/dev/null 2>&1 ) || return 1
+  [[ -f "$D/specs/009-unc/uncertainties.md" ]] || return 1
+  grep -q 'Is the retry count 3 or 5' "$D/specs/009-unc/uncertainties.md" || return 1
+  grep -q 'Iteration 2' "$D/specs/009-unc/uncertainties.md" || return 1
+  grep -q 'Uncertainty flags\*\*: 2' "$D/specs/009-unc/run-report.md" || return 1
+  python3 -c "import json,sys; d=json.loads(open(sys.argv[1]).readlines()[-1]); assert d['uncertainty_count']==2" "$M/runs.jsonl" || return 1
+  # empty case
+  printf '# Progress\n## Iteration 1 — ts\nclean\n' > "$D/prog2.md"
+  local rid2
+  rid2="$(SPECKIT_PRO_METRICS_DIR="$M" bash "$REPORT" start --feature 009-unc 2>/dev/null)" || return 1
+  ( cd "$D" && SPECKIT_PRO_METRICS_DIR="$M" bash "$REPORT" finish --run-id "$rid2" --feature 009-unc \
+      --progress-file "$D/prog2.md" --no-stdout >/dev/null 2>&1 ) || return 1
+  grep -q 'No uncertainties raised' "$D/specs/009-unc/uncertainties.md"
+}
+
 # ── Harness self-test (contract row 1.4) ─────────────────────────────────────
 check_failing_fixture() { return 1; }   # only registered under --selftest
 
@@ -261,6 +385,11 @@ result skip-events           "$(check_skip_events         >/dev/null 2>&1; echo 
 result skip-render           "$(check_skip_render         >/dev/null 2>&1; echo $?)"
 result unknown-counter       "$(check_unknown_counter     >/dev/null 2>&1; echo $?)"
 result checkpoint-patterns   "$(check_checkpoint_patterns >/dev/null 2>&1; echo $?)"
+result lock-failloud         "$(check_lock_failloud       >/dev/null 2>&1; echo $?)"
+result fanout-concurrent     "$(check_fanout_concurrent   >/dev/null 2>&1; echo $?)"
+result drift-checker         "$(check_drift_checker       >/dev/null 2>&1; echo $?)"
+result unattended-defaults   "$(check_unattended_defaults >/dev/null 2>&1; echo $?)"
+result uncertainty-digest    "$(check_uncertainty_digest  >/dev/null 2>&1; echo $?)"
 if [[ "$SELFTEST" -eq 1 ]]; then
   result selftest-fixture    "$(check_failing_fixture     >/dev/null 2>&1; echo $?)"
 else

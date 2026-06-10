@@ -450,7 +450,7 @@ PY
 # finish
 # =============================================================================
 cmd_finish() {
-  local feat="" run_id="" eval_verdict="" eval_score="" iterations="" max_iter="" parallel="" to_stdout=1
+  local feat="" run_id="" eval_verdict="" eval_score="" iterations="" max_iter="" parallel="" to_stdout=1 progress_file=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --feature)        feat="${2:-}"; shift 2 ;;
@@ -460,6 +460,7 @@ cmd_finish() {
       --iterations)     iterations="${2:-}"; shift 2 ;;
       --max-iterations) max_iter="${2:-}"; shift 2 ;;
       --parallel)       parallel="${2:-}"; shift 2 ;;
+      --progress-file)  progress_file="${2:-}"; shift 2 ;;
       --no-stdout)      to_stdout=0; shift ;;
       *) shift ;;
     esac
@@ -642,6 +643,45 @@ PY
   fi
   [[ -z "$parallel" ]] && { [[ "$par_dispatch" -gt 0 ]] && parallel="on" || parallel="off"; }
 
+  # ── Uncertainty digest (FR-015): extract <pro-uncertainty> blocks from the
+  #    progress log into <spec-dir>/uncertainties.md with iteration context ──
+  local unc_count=0
+  if [[ -z "$progress_file" && -n "$feat" ]]; then
+    # default: the feature's progress log, when present
+    [[ -f "$PROJECT_ROOT/.knowledge/features/$feat/progress.md" ]] && \
+      progress_file="$PROJECT_ROOT/.knowledge/features/$feat/progress.md"
+  fi
+  if [[ -n "$progress_file" && -f "$progress_file" && -n "$spec_dir" ]] && have_py; then
+    unc_count="$(RUN="$run_id" python3 - "$progress_file" "$spec_dir/uncertainties.md" <<'PY'
+import os, re, sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+out = ["# Uncertainty Digest", "",
+       "> Aggregated from `%s` by pro-report.sh finish (run %s)." % (os.path.basename(src), os.environ.get("RUN") or "?"), ""]
+count = 0
+# Walk iteration sections; capture <pro-uncertainty> blocks with their heading context.
+cur = "（no iteration heading）"
+for chunk in re.split(r"(^## Iteration [^\n]*$)", text, flags=re.M):
+    if chunk.startswith("## Iteration"):
+        cur = chunk.strip("# ").strip()
+        continue
+    for m in re.finditer(r"<pro-uncertainty>(.*?)</pro-uncertainty>", chunk, flags=re.S):
+        count += 1
+        out.append("## %d. %s" % (count, cur))
+        out.append("")
+        out.append(m.group(1).strip())
+        out.append("")
+if count == 0:
+    out.append("_No uncertainties raised during this run._")
+with open(dst, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(out) + "\n")
+print(count)
+PY
+)" || unc_count=0
+    [[ "$unc_count" =~ ^[0-9]+$ ]] || unc_count=0
+    fanout_log "uncertainty digest: $unc_count flag(s) → ${spec_dir}/uncertainties.md"
+  fi
+
   # ── Heuristic "where to improve" notes ──
   local notes_file; notes_file="$(mktemp "${TMPDIR:-/tmp}/proreport.XXXXXX")"
   {
@@ -811,7 +851,7 @@ PY
     PDISP="$par_dispatch" PCOMP="$par_complete" PFAIL="$par_fail" PTMO="$par_timeout" \
     SPEEDUP="$speedup" LCALLS="$loc_calls" LFAIL="$loc_fail" LSKIP="$loc_skips" \
     NOTES_FILE="$notes_file" REPORT="$report_path" RUNSLOG="$RUNS_LOG" \
-    TELEM_FILE="$telem_file" \
+    TELEM_FILE="$telem_file" UNC_COUNT="$unc_count" \
       python3 - <<'PY'
 import json, os
 g = os.environ.get
@@ -930,6 +970,7 @@ lines.append("- **Human interventions**: %s · **rework**: %s · **circuit-break
     fmt_or_unavail(telem.get("human_interventions")),
     fmt_or_unavail(telem.get("rework_count")),
     fmt_or_unavail(telem.get("circuit_breaker_trips"))))
+lines.append("- **Uncertainty flags**: %s (digest: `uncertainties.md` in the feature dir)" % (g("UNC_COUNT") or "0"))
 lines.append("")
 # ── 🚦 Capability skips + auto-decisions (FR-005/FR-014: zero silent skips) ──
 _skips = telem.get("skips") or []
@@ -1003,6 +1044,7 @@ summary["completion_state"]      = telem.get("completion_state")
 summary["telemetry_complete"]    = bool(telem.get("telemetry_complete"))
 summary["skip_count"]            = len(telem.get("skips") or [])
 summary["decision_count"]        = len(telem.get("decisions") or [])
+summary["uncertainty_count"]     = int(g("UNC_COUNT") or 0)
 os.makedirs(os.path.dirname(g("RUNSLOG")), exist_ok=True)
 # flock-guarded append: concurrent finishers must never interleave lines.
 import fcntl

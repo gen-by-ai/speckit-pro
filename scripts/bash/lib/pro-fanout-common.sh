@@ -44,13 +44,15 @@ fanout_telemetry() {
   if command -v python3 >/dev/null 2>&1; then
     TS="$(fanout_now_iso)" RUN="$run_id" EV="$event" POR="$portion" SUB="$substrate" \
     DUR="$dur" ERRMSG="$err" python3 - "$mf" <<'PY'
-import json, os, sys
+import fcntl, json, os, sys
 rec = {"ts": os.environ["TS"], "run_id": os.environ["RUN"],
        "event": os.environ["EV"], "substrate": os.environ["SUB"]}
 if os.environ.get("POR"): rec["portion_id"] = os.environ["POR"]
 if os.environ.get("DUR"): rec["duration_ms"] = int(os.environ["DUR"])
 if os.environ.get("ERRMSG"): rec["error"] = os.environ["ERRMSG"]
+# flock-guarded append: concurrent workers must never interleave partial lines.
 with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     fh.write(json.dumps(rec) + "\n")
 PY
   fi

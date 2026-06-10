@@ -18,6 +18,8 @@ $ARGUMENTS
 
 Optional: `--spec-dir <path>` to target a specific feature. If omitted, auto-detect.
 
+Optional: `--amend --row "<row description>" [--sprint <N>]` — append one acceptance-criteria row to an already-sealed contract mid-run. See `## Amend flow (--amend)` below; the generate steps (1–7) do not apply.
+
 ## Auto-Detection
 
 If `--spec-dir` is not provided:
@@ -260,3 +262,62 @@ Rules:
 - **Defense in depth.** The cryptographic seal (verified by `/pro.evaluate` Step 1.5) and the loop hard rule are independent layers — either alone catches tampering; together they are belt-and-suspenders. A reward-hacking loop cannot "fix" a mismatch by re-running the evaluator, because a mismatch returns a hard fail with no revision retry.
 
 Honest capability gaps are handled openly, not silently: if no hashing tool exists at seal time, the seal file holds the literal token `UNSEALED`, and `/pro.evaluate` logs a WARN and proceeds rather than failing the sprint. A seal that is *absent* on an evaluation-enabled run is treated as tamper (fail-closed); a seal that says `UNSEALED` is treated as a known gap (fail-open).
+
+## Amend flow (`--amend`)
+
+Mid-run, a sprint can discover that the rubric is missing a row — a new branch the contract failed to cover, an edge case surfaced by implementation. The fix is never an in-place edit of the sealed file: it is an **amendment** through this command, the sole seal owner. Amendments are auditable and strictly additive — they may ADD scope, never weaken it.
+
+### Invocation
+
+```
+/pro.contract --amend --row "<row description>" [--sprint <N>]
+```
+
+If `--sprint` is omitted, amend the sprint named in `<FEATURE_KNOWLEDGE_DIR>/contracts/current.md`.
+
+### Amend steps
+
+1. **Verify the existing seal before touching anything.** Read `sprint-<N>.md`, recompute its hash (same hash ladder as Step 5c) and compare with `sprint-<N>.sha256`. If the seal ALREADY mismatches, abort with `FAIL:rubric-mutated` — an amend must never paper over tampering. If the recorded seal is the literal token `UNSEALED`, skip the comparison (known capability gap, fail-open) and continue.
+
+   ```bash
+   CONTRACT_FILE="<FEATURE_KNOWLEDGE_DIR>/contracts/sprint-<N>.md"
+   SEAL="${CONTRACT_FILE%.md}.sha256"
+   RECORDED=$(cat "$SEAL")
+   CURRENT=$(shasum -a 256 "$CONTRACT_FILE" | cut -d' ' -f1)   # or the python3/sha256sum ladder rungs
+   if [ "$RECORDED" != "UNSEALED" ] && [ "$RECORDED" != "$CURRENT" ]; then
+     echo "FAIL:rubric-mutated"; exit 1
+   fi
+   ```
+
+2. **Append the new row** to the end of the Acceptance Criteria table. The row follows the full row schema (all required columns — Severity, Failure Mode, Browser Test, Verified By) and its text is tagged `amended-mid-run (unattended)` — or `amended-mid-run (operator)` when invoked interactively by a human. The tag is how `/pro.evaluate` distinguishes amendment rows from the originally-sealed rubric.
+
+3. **Preserve seal history, then re-seal.** Append the old seal line to `sprint-<N>.sha256.history` (create the file if missing), recompute the seal of the amended contract (same hash ladder as Step 5c), write it to `sprint-<N>.sha256`, and `git add -f` both:
+
+   ```bash
+   cat "$SEAL" >> "${SEAL}.history"
+   shasum -a 256 "$CONTRACT_FILE" | cut -d' ' -f1 > "$SEAL"    # or the python3/sha256sum ladder rungs
+   git add -f "$SEAL" "${SEAL}.history"
+   ```
+
+4. **Record the amendment** in the run log (best-effort — never block on telemetry):
+
+   ```bash
+   bash "$PRO_SCRIPTS/pro-report.sh" event decision "-" contract_amendment auto "sprint-<N>: <row summary>" || true
+   ```
+
+5. **Commit** the amended contract, the new seal, and the seal history:
+
+   ```bash
+   git add -f "$CONTRACT_FILE" "$SEAL" "${SEAL}.history"
+   git commit -m "[Pro] Sprint <N> contract amended + re-sealed — <short reason>"
+   ```
+
+### Hard rules
+
+- Amendments may **ADD scope** (new rows) — they MUST NOT edit or delete existing rows, lower a severity, or relax an Expected Behavior. The original rubric is append-only.
+- `/pro.evaluate` enumerates `amended-mid-run` rows and fails the sprint `FAIL:rubric-weakened` if a pre-existing criterion was relaxed.
+- **The generator/loop NEVER re-seals directly** — this command is the sole seal owner. A seal that changed without a matching `.sha256.history` entry and a `contract amended + re-sealed` commit is tamper, not an amendment.
+
+### Trigger
+
+The loop's "Contract row needed" blocker invokes this flow in unattended mode — `pro.loop.md` owns that invocation. This is the concrete shape of the Rubric immutability rule above: the loop does not patch the file, it STOPs and routes the new row through `/pro.contract --amend`.

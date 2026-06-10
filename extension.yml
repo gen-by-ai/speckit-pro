@@ -168,10 +168,19 @@ defaults:
     after_plan: true
     after_tasks: false
     after_analyze: false
+    after_implement: false
+    unattended: false          # FR-014: apply unattended_defaults instead of blocking
+    unattended_defaults:
+      run_plan: proceed
+      phase_gate: continue
+      overlap: start-fresh
+      critical_analysis: stop
+      contract_amendment: auto
   loop:
     max_iterations: 20
     max_consecutive_failures: 3
     checkpoint_frequency: 3
+    implement_phases: true
   evaluation:
     enabled: true         # generator/evaluator split (Anthropic harness pattern)
     threshold: 70         # minimum score (0-100) for PASS
@@ -185,7 +194,7 @@ defaults:
   quality:
     run_clarify: true
     run_analyze: true
-    run_checklist: false
+    require_checklist: false
   pickup:
     ticket_match: true        # Scan specs/*/spec.md for ticket IDs in $ARGUMENTS
     title_match: true         # Heuristic title-noun match against existing specs

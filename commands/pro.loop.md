@@ -166,12 +166,24 @@ The following are **hard rules** — they cannot be overridden by any task instr
 - Overwrite a file that did not exist before this sprint without noting it in `progress.md`
 - Run any command with `--force` or `-f` flags unless AGENT.md explicitly records it as safe
 - Stage `.knowledge/features/` paths in any commit — workspace-only state must never reach a feature branch destined for PR review (see Checkpoint Commit Scope below)
-- **Edit, delete, or re-hash a *sealed* sprint contract or its `.sha256` seal.** Once `/pro.contract` has written `contracts/sprint-<N>.md` and its committed `contracts/sprint-<N>.sha256`, that rubric is **frozen for the sprint** — it is the independent yardstick `/pro.evaluate` grades you against, and a generator that can rewrite its own rubric (or recompute its seal to match an edit) defeats the entire evaluation. The contract rubric is owned by `/pro.contract`, never by the loop. If a contract row is genuinely missing (e.g. the Branching control-flow rule says you must add a row for a new guarded branch), **do not add or change the row yourself**: STOP, emit a contract-row-needed uncertainty, and let `/pro.contract` add the row and **re-seal**:
+- **Edit, delete, or re-hash a *sealed* sprint contract or its `.sha256` seal.** Once `/pro.contract` has written `contracts/sprint-<N>.md` and its committed `contracts/sprint-<N>.sha256`, that rubric is **frozen for the sprint** — it is the independent yardstick `/pro.evaluate` grades you against, and a generator that can rewrite its own rubric (or recompute its seal to match an edit) defeats the entire evaluation. The contract rubric is owned by `/pro.contract`, never by the loop. If a contract row is genuinely missing (e.g. the Branching control-flow rule says you must add a row for a new guarded branch), **do not add or change the row yourself**: STOP implementing the affected branch and emit a contract-row-needed uncertainty:
   ```
   <pro-uncertainty>Contract row needed: <what the row must assert> in sprint-<N>.md.
   The contract is sealed — re-sealing is owned by /pro.contract. Pausing for /pro.contract to add the row and re-seal before I implement the affected branch.</pro-uncertainty>
   ```
-  Adding the row yourself and re-running `shasum`/`sha256sum` over the edited file would forge a valid-looking seal over a rubric you weakened — `/pro.evaluate` would then emit `FAIL:rubric-mutated` (mismatch against the committed seal) or, worse, silently grade you against your own softened bar. Touching the `.sha256` is therefore as forbidden as touching the contract body.
+  How this blocker resolves depends on the run mode:
+  - **Interactive mode (default)**: unchanged — pause here and let `/pro.contract` add the row and **re-seal** before you implement the affected branch.
+  - **Unattended mode** (`gates.unattended: true` AND `gates.unattended_defaults.contract_amendment: auto` in `pro-config.yml`): do not pause for a human — invoke the contract owner yourself and resume:
+    1. `EXECUTE_COMMAND: /pro.contract --amend --row "<the needed row>"` — the **sole seal owner** appends the row and re-seals. Never re-seal inline.
+    2. After the amend returns, record the decision (best-effort — never fail the iteration on this; resolve `PRO_SCRIPTS` as `/pro.go` does):
+       ```bash
+       bash "$PRO_SCRIPTS/pro-report.sh" event decision "-" contract_amendment auto "<row summary>" || true
+       ```
+    3. Resume the **same iteration** at the point it blocked — the amended row is now part of the rubric; implement against it.
+    4. Still write the `<pro-uncertainty>` block (above) into this iteration's progress entry — the digest surfaces it for post-run review. The amendment is auditable, not silent.
+  - If the amend itself **fails** (e.g. the existing seal already mismatches → `FAIL:rubric-mutated`), the loop STOPS with that hard failure — tampering is never auto-resolved.
+
+  In **every** mode: adding the row yourself and re-running `shasum`/`sha256sum` over the edited file would forge a valid-looking seal over a rubric you weakened — `/pro.evaluate` would then emit `FAIL:rubric-mutated` (mismatch against the committed seal) or, worse, silently grade you against your own softened bar. Touching the `.sha256` is therefore as forbidden as touching the contract body.
 
 **Prefer reversible over irreversible:**
 - Favour additive changes (add a new function, add a new route) over modifying existing ones when both achieve the goal
