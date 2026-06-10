@@ -23,6 +23,24 @@ Makes the **terminal/headless substrate** correctly drive an external agent CLI 
 
 **Config**: the `orchestration:` block + extended `evaluation:`/`reporting:` (`regression`/`otel`/`probes`/`improvements`) in `pro-config` + `extension.yml` defaults. **Committed surfaces** under `.knowledge/`: `improvements.md`, `probes/` fixtures, `contracts/*.sha256` seals — everything else under `.knowledge/metrics/` is gitignored telemetry. **Invariants respected**: degrade-not-abort (capability profile + fail-closed gate); single telemetry writer (`pro-report.sh`); default behavior byte-for-byte unchanged (only the opt-in headless-claude path changes).
 
+## Autonomy & reliability hardening (feature 003)
+
+Five-cluster hardening of unattended operation: artifact-based resume, zero silent skips, state-file
+integrity, malformed-signal handling, unattended gates. Verified by the hermetic suite `scripts/tests/hardening-smoke.sh` (17 checks).
+
+| Component | Path | Role |
+|---|---|---|
+| Resume detector | `scripts/bash/pro-resume-detect.sh` | Deterministic artifact-based phase detection (PHASE/NEXT/ITER_LAST/REMAINING/WARNING); `pro.resume.md` delegates to it — session.md optional |
+| Skip/decision events | `pro-report.sh event skip\|decision` | Structured records (reason classes disabled-by-config / environment-unavailable / error) into manifest `skips[]`/`decisions[]`; pre-run spool `pending-skips.jsonl` adopted at next start; rendered in run-report |
+| Run lifecycle | `pro-report.sh start/finish` | `status: open→finished\|interrupted`; orphan sweep at start (flock CAS); **finish always wins** over a sweep's interrupted presumption |
+| Drift checker | `scripts/local/config_defaults_check.py` | extension.yml `defaults:` vs pro-config.template.yml key-by-key; `--strict` for CI; never reports clean on unparsed input |
+| Unattended gates | `gates.unattended` + `unattended_defaults` | Per-gate recorded defaults (critical_analysis → conservative `stop`); decisions land in run-report + session.md |
+| Contract amendment | `pro.contract.md --amend` | Sole-seal-owner mid-run additions: `amended-mid-run` markers, seal history `sprint-N.sha256.history`, evaluator audit (`FAIL:rubric-weakened`) |
+| Uncertainty digest | `pro-report.sh finish --progress-file` | Extracts `<pro-uncertainty>` blocks → `<feature>/uncertainties.md` + counts in runs.jsonl |
+| Smoke harness | `scripts/tests/hardening-smoke.sh` | Hermetic per-check suite (temp `SPECKIT_PRO_METRICS_DIR`); the feature's executable acceptance criteria |
+
+**Invariants respected**: single telemetry writer (all new events route through pro-report.sh); locks fail loud (never write unlocked — scan_report exit 75); checkpoints stage scoped (`:(exclude)specs|.knowledge/features|.knowledge/metrics`) and are verified; an absent/unknown evaluator verdict is `FAIL:evaluator-output-invalid` — never an implicit pass.
+
 ## Authentication
 
 _(routes, middleware, token lifecycle — link to code paths)_

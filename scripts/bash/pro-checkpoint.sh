@@ -85,13 +85,21 @@ main() {
   # Git operations
   local commit_hash="N/A"
   if git rev-parse --is-inside-work-tree &>/dev/null; then
-    git add . 2>/dev/null || true
+    # Scoped staging (FR-007): never blanket-stage — workspace state (specs/,
+    # .knowledge/features|metrics) stays out of checkpoint commits.
+    if ! git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null; then
+      log_warn "Staging failed: $(git status -s 2>/dev/null | head -1)"
+    fi
     if ! git diff --cached --quiet 2>/dev/null; then
       local commit_msg="[Pro] Checkpoint: $LABEL ($completed/$total tasks)"
       [[ -n "$FEATURE_NAME" ]] && commit_msg="$commit_msg [feature: $FEATURE_NAME]"
-      git commit -m "$commit_msg" 2>/dev/null
-      commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-      log_success "Committed checkpoint: $LABEL ($commit_hash)"
+      if ! git commit -m "$commit_msg" 2>/dev/null; then
+        log_error "Checkpoint commit failed: $(git status -s 2>/dev/null | head -3 | tr '\n' ' ')"
+        commit_hash="failed"
+      else
+        commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        log_success "Committed checkpoint: $LABEL ($commit_hash)"
+      fi
     else
       log_warn "No uncommitted changes — skipping commit"
       commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "current")

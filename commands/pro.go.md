@@ -630,11 +630,14 @@ Write `<SPEC_DIR>/handoff.md` (≤400 words). See `pro.loop.md` Handoff Artifact
 
 **8. Checkpoint commit**
 
-If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete:
+If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete (scoped staging per FR-007 — never blanket-stage; verify the commit):
 ```bash
-git add .
-git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)"
+git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics'
+# (when commit.commit_artifacts: true, drop only the specs exclusion)
+git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)" \
+  || echo "[Pro] checkpoint commit FAILED — $(git status -s | head -3 | tr '\n' ' ')"
 ```
+On commit failure, record it (`event skip <run-id> checkpoint loop error "<reason>"`) — never report a checkpoint as committed without a verified hash.
 Log the commit hash in `<FEATURE_KNOWLEDGE_DIR>/progress.md`.
 
 **9. Update AGENT.md**

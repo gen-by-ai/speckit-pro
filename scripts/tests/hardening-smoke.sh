@@ -228,12 +228,16 @@ check_unknown_counter() { # row 3.4
   [[ "$out" == "2 1 2" ]]
 }
 
-check_checkpoint_patterns() { # row 3.5 (static assertions)
-  local F="$ROOT/scripts/bash/pro-orchestrate.sh"
-  ! grep -q 'git add \. 2>/dev/null || true' "$F" || return 1
-  grep -q ":(exclude)specs" "$F" || return 1
-  grep -q ":(exclude).knowledge/features" "$F" || return 1
-  grep -q ":(exclude).knowledge/metrics" "$F" || return 1
+check_checkpoint_patterns() { # row 3.5 (static assertions, widened post-eval)
+  # No blanket staging anywhere in the shipped scripts or the loop protocol.
+  ! grep -rqE 'git add \. *(2>/dev/null)?( *\|\| *true)?$' "$ROOT/scripts/bash" || return 1
+  ! grep -qE '^git add \.$' "$ROOT/commands/pro.go.md" || return 1
+  local F
+  for F in "$ROOT/scripts/bash/pro-orchestrate.sh" "$ROOT/scripts/bash/pro-checkpoint.sh"; do
+    grep -q ":(exclude)specs" "$F" || return 1
+    grep -q ":(exclude).knowledge/features" "$F" || return 1
+    grep -q ":(exclude).knowledge/metrics" "$F" || return 1
+  done
 }
 
 # ── Sprint 4 — US3 state integrity (contract rows 4.0–4.2) ──────────────────
