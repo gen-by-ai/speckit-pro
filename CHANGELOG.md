@@ -2,6 +2,33 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.23] — 2026-06-10
+
+Focus: **autonomy & reliability hardening** — fewer manual interventions, fewer silent failure modes, better self-recovery during long runs. Driven by a 45-finding deep audit of the implementation (three parallel reviews; register in the feature's `audit-findings.md`). Five clusters, each with hermetic smoke coverage in the new `scripts/tests/hardening-smoke.sh` (17 checks).
+
+### Added — recoverability (FR-001..003)
+- **Artifact-based resume.** New deterministic detector `scripts/bash/pro-resume-detect.sh` (PHASE/NEXT/ITER_LAST/REMAINING/WARNING from artifacts alone); `pro.resume.md` delegates to it — the `session.md`-missing dead end is gone, and resumed loops get `remaining = max_iterations − last-iteration` so budgets are never double-spent.
+- **Run-record lifecycle + orphan sweep.** Manifests carry `status: open|finished|interrupted`; `pro-report.sh start` closes abandoned `open` records as `interrupted` (flock CAS, partial data preserved); *finish always wins* — a live concurrent run swept by mistake self-heals when its own `finish` runs. `aggregate` reports interrupted-run counts.
+
+### Added — zero silent skips (FR-004..007)
+- **Structured skip/decision events.** `pro-report.sh event skip|decision` (reason classes `disabled-by-config` / `environment-unavailable` / `error`; `.current` fallback; pre-run spool adopted at next start). `pro-local-prep.sh`, `pro-materialize.sh`, `pro-local-review.sh` now classify their degradations (a missing Ollama model is environment, not config). Run reports gain **Capability skips** and **Decisions** sections (explicit "none"); `runs.jsonl` gains `skip_count`/`decision_count`.
+- **Placeholder accounting.** `local_count_unknown_markers` counts structured `- UNKNOWN` bullets; materialize prints `N UNKNOWN markers across M packets` + emits a degraded event; `pro.go.md` warns before consuming skeleton packets.
+- **Verified, scoped checkpoints.** `checkpoint_commit()` stages with exclude pathspecs (`specs/`, `.knowledge/features/`, `.knowledge/metrics/` per `commit.commit_artifacts`), checks staging/commit exit codes (no more `git add . 2>/dev/null || true`), and emits an error event on failure — success is never reported unverified.
+
+### Fixed — state integrity (FR-008..010)
+- **Lock that wrote anyway.** `scan_report.py with_lock` ran the protected write even when the lock was never acquired; it now fails loud (exit 75, holder PID named) without writing.
+- **Concurrency-safe state.** flock-guarded manifest read-modify-writes (`phase`/`call`/events), flock'd JSONL appends (`runs.jsonl`, fan-out telemetry), atomic `.current` writes with explicit-run-id preference. `SPECKIT_PRO_METRICS_DIR` override enables hermetic testing.
+
+### Fixed — malformed signals (FR-011..013)
+- **Unknown evaluator verdict was treated as PASS.** `pro-orchestrate.sh handle_eval_result`'s fallback returned accepted for any unrecognized verdict — including `ERROR:*`; now `FAIL:evaluator-output-invalid` (hard fail + decision event). `pro.go.md` Phase 7c gets the matching malformed-verdict rule.
+- **Worker result envelope.** Parallel `[P]` workers return a defined JSON envelope; a task is marked done **iff** `status=="pass"`; breaker aftermath: serial retry once, then `BLOCKED:<task-id>`. `pro.evaluate.md` distinguishes `test-script-not-found` from failing tests.
+- **Config-default drift check.** New `scripts/local/config_defaults_check.py` (stdlib YAML-subset comparator, `--strict`); resolved real drifts: `evaluation.enabled` (template `false` vs runtime-effective `true`), missing `gates.after_implement`/`loop.implement_phases` extension defaults, `run_checklist`→`require_checklist` naming.
+
+### Added — unattended mode (FR-014..016)
+- **`gates.unattended` + per-gate `unattended_defaults`** (`run_plan: proceed`, `phase_gate: continue`, `overlap: start-fresh`, `critical_analysis: stop` — conservative, `contract_amendment: auto`); every auto-applied default is recorded as a decision event + session.md line. Interactive behavior unchanged while `false`.
+- **Auditable sealed-contract amendment.** `/pro.contract --amend` (sole seal owner): rows tagged `amended-mid-run`, prior seal preserved in `sprint-<N>.sha256.history`, re-seal + commit; the loop auto-invokes it unattended (tampering still hard-stops); `/pro.evaluate` enumerates amended rows and fails `FAIL:rubric-weakened` if any pre-existing criterion was relaxed.
+- **Uncertainty digest.** `pro-report.sh finish --progress-file` extracts every `<pro-uncertainty>` block into `<feature>/uncertainties.md` with iteration context; count lands in run-report + `runs.jsonl`.
+
 ## [1.22] — 2026-06-08
 
 Focus: **get `/pro.go` into its best shape — measurable, self-improving, and correct on the unattended headless path.** This release first makes every run measurable with a cross-run memory (run reports + improvements ledger + an opt-in parallel implement loop — see *the measurability foundation* at the end of this entry), then makes the *unattended* path the orchestrator drives when `agent_cli=claude` runs out-of-harness **correct, observable, and safe to let improve itself** — the part where a wrong CLI flag silently spends the whole budget on iteration 1, a self-grading loop can mark its own homework, and an unvetted "lesson" can steer the next run. All new behavior is opt-in and inert on the default path (`agent_cli=copilot`, in-harness loop, OTel off, `evaluation.enabled` untouched), so existing **v1.21.x** runs behave byte-for-byte unchanged.
