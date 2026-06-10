@@ -2,6 +2,11 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.23.2] — 2026-06-10
+
+### Fixed
+- **`update-all.sh` vs spec-kit 0.10.x.** Step 1 self-upgrades the specify CLI, and 0.10.1 renamed `init --ai` → `--integration` and dropped `--no-git` — so step 2 failed mid-run with "No such option: --ai" on freshly-upgraded machines. The script now probes the *installed* binary's `init --help` at runtime and adapts to either surface (the improvements-ledger lesson: verify external-CLI flags against the installed binary, never memory — this is its second confirmed incident). All other `specify` subcommands the script uses (`integration upgrade/install/use`, `extension add/list`) were verified intact on 0.10.1. Recovery for a half-upgraded project: re-run with `--no-base` once (installs pro ≥1.23.2 with the fixed script), then optionally re-run fully to refresh base templates.
+
 ## [1.23.1] — 2026-06-10
 
 Focus: **post-release validation of the v1.23 install.** A 6-lens test workflow (84 checks, findings adversarially verified) exercised the installed extension the way a consumer project runs it; every confirmed finding is fixed and pinned by new smoke checks (suite now 21).

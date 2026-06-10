@@ -443,6 +443,14 @@ check_drift_consumer_fallback() { # CDC-001: flag-less run works in a consumer-s
   ! printf '%s\n' "$out" | grep -q 'PARSE-FAILURE'
 }
 
+check_updateall_cli_probe() { # v1.23.2: update-all.sh probes the installed CLI's flag surface
+  local F="$ROOT/scripts/bash/update-all.sh"
+  # step 1 self-upgrades the CLI mid-run, so init flags must be probed, never hardcoded
+  grep -q 'INIT_AGENT_FLAG' "$F" || return 1
+  grep -q 'specify init --help' "$F" || return 1
+  ! grep -qE 'specify init \. --ai ' "$F" || return 1
+}
+
 # ── Harness self-test (contract row 1.4) ─────────────────────────────────────
 check_failing_fixture() { return 1; }   # only registered under --selftest
 
@@ -478,6 +486,7 @@ result scoped-staging-runtime "$(check_scoped_staging_runtime >/dev/null 2>&1; e
 result tamper-grep-weakened  "$(check_tamper_grep_weakened    >/dev/null 2>&1; echo $?)"
 result no-unshippable-refs   "$(check_no_unshippable_refs     >/dev/null 2>&1; echo $?)"
 result drift-consumer        "$(check_drift_consumer_fallback >/dev/null 2>&1; echo $?)"
+result updateall-cli-probe   "$(check_updateall_cli_probe     >/dev/null 2>&1; echo $?)"
 if [[ "$SELFTEST" -eq 1 ]]; then
   result selftest-fixture    "$(check_failing_fixture     >/dev/null 2>&1; echo $?)"
 else

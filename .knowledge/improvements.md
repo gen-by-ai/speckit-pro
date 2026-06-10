@@ -87,7 +87,7 @@ anomalies needs no new entry — a stale learning is worse than none.
 - [2026-06-08] (002-self-improving-orchestration, eval PASS 90) **Verify external-CLI flags against the installed binary, not docs/memory — and re-verify before shipping a flag-dependent fix.**
   Why: a research pass asserted `--system-prompt-file` exists; `claude --help` on the installed v2.1.116 showed it does NOT (it only appears inside the `--bare` blurb text). Building on the hallucinated flag would have re-introduced the very FR-001 bug being fixed.
   Apply: for any agent-CLI integration, run `<cli> --help` in the session and pin the verified flag surface into the plan/contracts; treat doc/memory claims about flags as unverified until checked.
-  Evidence: the design critic + the build both keyed off the verified 2.1.116 surface (no `--system-prompt-file`, no `--max-turns`, `--max-budget-usd` per-invocation).  Promoted-by: —  Disproven-by: —
+  Evidence: the design critic + the build both keyed off the verified 2.1.116 surface (no `--system-prompt-file`, no `--max-turns`, `--max-budget-usd` per-invocation). Second incident 2026-06-10: spec-kit 0.10.1 renamed `init --ai`→`--integration` and dropped `--no-git`, breaking update-all.sh step 2 mid-run right after step 1 self-upgraded the CLI — fixed in v1.23.2 by probing `specify init --help` at runtime.  Promoted-by: —  Disproven-by: —
 
 ## Archived (low value / superseded)
 

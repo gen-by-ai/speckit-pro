@@ -128,7 +128,18 @@ specify self upgrade || echo "    (self upgrade skipped/failed — continuing; t
 # ---- 2. base templates/scripts + primary integration ------------------------
 if [[ $DO_BASE -eq 1 ]]; then
   echo "==> 2/5  Refreshing base templates/scripts + primary integration ($PRIMARY)"
-  specify init . --ai "$PRIMARY" --force --no-git
+  # Step 1 may have just self-upgraded the CLI, so probe the INSTALLED binary's
+  # flag surface instead of hardcoding one version (spec-kit 0.10.x renamed
+  # --ai to --integration and dropped --no-git; 0.9.x had both).
+  INIT_HELP="$(specify init --help 2>&1 || true)"
+  if printf '%s' "$INIT_HELP" | grep -q -- '--integration'; then
+    INIT_AGENT_FLAG="--integration"
+  else
+    INIT_AGENT_FLAG="--ai"
+  fi
+  INIT_EXTRA=()
+  printf '%s' "$INIT_HELP" | grep -q -- '--no-git' && INIT_EXTRA+=(--no-git)
+  specify init . "$INIT_AGENT_FLAG" "$PRIMARY" --force ${INIT_EXTRA[@]+"${INIT_EXTRA[@]}"}
 else
   echo "==> 2/5  Skipped base refresh (--no-base); ensuring primary integration ($PRIMARY)"
   specify integration upgrade "$PRIMARY" --force 2>/dev/null \
