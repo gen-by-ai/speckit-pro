@@ -342,6 +342,24 @@ except OSError:
 PY
 }
 
+# ── Packet quality ───────────────────────────────────────────────────────────
+# Count structured "- UNKNOWN" placeholder lines across *.md in a dir.
+# Prints "<markers> <files-with-markers> <files-total>". Prose mentions of
+# UNKNOWN don't count — only lines that are exactly a "- UNKNOWN" bullet.
+local_count_unknown_markers() {
+  local dir="$1" total=0 hit_files=0 files=0 f n
+  for f in "$dir"/*.md; do
+    [[ -f "$f" ]] || continue
+    files=$(( files + 1 ))
+    n="$(grep -cE '^[[:space:]]*- UNKNOWN[[:space:]]*$' "$f" 2>/dev/null)"; n="${n:-0}"
+    if [[ "$n" -gt 0 ]]; then
+      total=$(( total + n ))
+      hit_files=$(( hit_files + 1 ))
+    fi
+  done
+  echo "$total $hit_files $files"
+}
+
 # ── Pretty summary ───────────────────────────────────────────────────────────
 local_print_summary() {
   local title="$1"; shift

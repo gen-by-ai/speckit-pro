@@ -1,10 +1,10 @@
 ---
-description: "Resume an interrupted autonomous run from the last saved session checkpoint — reads session state and continues from the correct phase"
+description: "Resume an interrupted autonomous run from durable artifacts (session.md optional) — derives the correct phase and remaining iteration budget deterministically and continues from that point"
 ---
 
 # SpecKit Pro — Resume
 
-Resume an interrupted SpecKit Pro autonomous run. Reads `session.md` to determine where the pipeline stopped and continues from that point.
+Resume an interrupted SpecKit Pro autonomous run. State is derived from durable artifacts (spec.md, plan.md, tasks.md, contracts, progress.md) by a deterministic detector — `session.md` is optional enrichment, never a prerequisite.
 
 ## User Input
 
@@ -20,22 +20,45 @@ Optional:
 ## Detection
 
 1. Run `.specify/scripts/bash/check-prerequisites.sh --json` to detect `FEATURE_DIR`.
-2. Load `<FEATURE_DIR>/session.md` to determine last known state.
-3. Load `<FEATURE_DIR>/progress.md` to understand iteration history.
+2. Run the deterministic detector and **trust its output**:
 
-If no `session.md` exists:
-```
-[Pro] No session state found.
-• To start a new pipeline: /pro.go <description>
-• To resume the implement loop only: /pro.loop feature=<name> tasks=<path> ...
-```
+   ```bash
+   PRO_SCRIPTS="$(git rev-parse --show-toplevel)/.specify/extensions/pro/scripts/bash"
+   [ -f "$PRO_SCRIPTS/pro-resume-detect.sh" ] || PRO_SCRIPTS="$(git rev-parse --show-toplevel)/scripts/bash"
+   bash "$PRO_SCRIPTS/pro-resume-detect.sh" --feature <slug> [--max-iterations <N from config>]
+   ```
+
+   The detector prints `KEY=VALUE` lines:
+   - `PHASE` — one of `none|spec-only|plan-only|tasks-only|contracts-ready|in-loop|complete`
+   - `NEXT` — the suggested command
+   - `ITER_LAST` — last completed loop iteration
+   - `REMAINING` — remaining iteration budget
+   - zero or more `WARNING=` lines (e.g. a stale `handoff.md` naming a different feature, or `tasks.md` modified after the last checkpoint)
+3. `session.md` and `progress.md` are **optional enrichment** — when present, load them to display history in the resume banner; their absence MUST NOT block resume. If `session.md` is missing, print one line and continue:
+
+   ```
+   [Pro] session.md absent — state derived from artifacts (this is normal after an interrupted run).
+   ```
+
+### Phase decision table
+
+The detector's `PHASE` maps to a resume action as follows — this mapping is explicit, never guess:
+
+| Artifacts present | PHASE | Resume action |
+|---|---|---|
+| no spec.md | none | `/pro.go <description>` (nothing to resume) |
+| spec.md only | spec-only | continue at `/speckit.plan` |
+| + plan.md | plan-only | continue at `/speckit.tasks` |
+| + tasks.md, no contracts | tasks-only | `/pro.contract` then the implement loop |
+| + `.knowledge/features/<slug>/contracts/` | contracts-ready | implement loop, iteration 1 |
+| + progress.md with `## Iteration N` entries | in-loop | implement loop at iteration N+1 with remaining budget = max_iterations − N |
+| tasks.md fully `[x]` | complete | Phase 7/8 wrap-up (reconcile → evaluate → report) only if not yet evaluated |
 
 ## Session Analysis
 
-Parse `session.md` to find:
-- Last completed phase
-- Last phase status (completed / failed / in_progress)
-- Current iteration (if in implement loop)
+The banner is driven by the detector output. When `session.md` / `progress.md` exist, additionally parse them to enrich the display with:
+- Last completed phase and status (completed / failed / in_progress)
+- Iteration history
 - Any blocked tasks noted
 
 Display the resume plan:
@@ -45,10 +68,13 @@ Display the resume plan:
 ║  SpecKit Pro — Resume                                ║
 ╠══════════════════════════════════════════════════════╣
 ║  Feature:        <feature name>                      ║
-║  Last phase:     <phase> (<status>)                  ║
-║  Resuming from:  <next phase or implement loop>      ║
-║  Loop iteration: <N> / <max>  (if in implement)      ║
+║  Phase:          <PHASE>                             ║
+║  Resuming from:  <NEXT>                              ║
+║  Loop iteration: <ITER_LAST+1> / <max>  (if in-loop) ║
+║  Remaining:      <REMAINING> iterations (if in-loop) ║
+║  Source:         artifacts (detector)                ║
 ╚══════════════════════════════════════════════════════╝
+⚠ <each WARNING= line from the detector, verbatim>
 
 Confirm resume? (yes/no)
 ```
@@ -66,7 +92,9 @@ Check tasks.md for remaining work:
   EXECUTE_COMMAND: /pro.knowledge-sync
   ```
   Run knowledge-sync only after evaluator **PASS** (`knowledge.sync_after_evaluate: true`).
-- If tasks remain: restart the orchestrator script (each iteration still primes per `pro.loop.md` step 0 when enabled):
+- If tasks remain: restart the orchestrator script (each iteration still primes per `pro.loop.md` step 0 when enabled).
+
+**Remaining-iterations rule**: total iterations across all sessions MUST NOT exceed `loop.max_iterations`. The loop resumes at iteration `ITER_LAST+1` and runs at most `REMAINING` further iterations — both values come from the detector. When invoking the orchestrator script, pass `--max-iterations <REMAINING>`.
 
 **Bash**:
 ```bash
@@ -75,7 +103,7 @@ Check tasks.md for remaining work:
   --tasks-path "<FEATURE_DIR>/tasks.md" \
   --spec-dir "<FEATURE_DIR>" \
   --resume \
-  --max-iterations <remaining_iterations> \
+  --max-iterations <REMAINING> \
   --checkpoint-frequency <checkpoint_freq> \
   --model "<model>" \
   --agent-cli "<agent_cli>"
@@ -88,7 +116,7 @@ Check tasks.md for remaining work:
   -TasksPath "<FEATURE_DIR>\tasks.md" `
   -SpecDir "<FEATURE_DIR>" `
   -Resume `
-  -MaxIterations <remaining_iterations> `
+  -MaxIterations <REMAINING> `
   -CheckpointFrequency <checkpoint_freq> `
   -Model "<model>" `
   -AgentCli "<agent_cli>"
@@ -115,9 +143,15 @@ If `progress.md` or `tasks.md` contains `<!-- BLOCKED:` entries:
 4. If skip: mark blocked tasks as `- [x] (skipped)` with a note
 5. If resolve-manually: pause and wait for user to edit `tasks.md`
 
+## Consistency Checks
+
+- Every `WARNING=` line from the detector MUST be surfaced in the resume banner.
+- A stale `handoff.md` naming a different feature is **ignored** — the loop falls back to progress.md + tasks.md context.
+- If tasks.md changed after the last checkpoint commit: note it in the banner and continue — the detector's verdict is the most conservative valid entry point. Never guess silently.
+
 ## Session State Update
 
-After resuming, append to `session.md`:
+After resuming, append to `session.md` (create it if absent):
 
 ```markdown
 ## Session Entry — <ISO timestamp>

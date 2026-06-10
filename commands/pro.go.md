@@ -526,6 +526,8 @@ Context-loading priority (cheapest sufficient bundle wins):
 
 If the work unit corresponds to a known task ID and `<SPEC_DIR>/task-packets/TASK-<id>-<slug>.md` exists (written by `/pro.materialize`), load that packet too — it replaces the need to re-derive the work unit's scope from scratch.
 
+**Placeholder guard (FR-006)**: before consuming any task packet or context-pack, count its structured placeholder lines (`- UNKNOWN` bullets). If the count is non-zero, print one warning line — `[Pro] packet TASK-<id> contains <N> UNKNOWN markers — skeleton fallback; treating tasks.md + sprint contract as authoritative` — and do NOT treat the packet's UNKNOWN sections as facts. The same rule applies to `context-pack.md` (its provenance banner says claims require verification; UNKNOWN markers mean the local model never filled them).
+
 Always load `<FEATURE_KNOWLEDGE_DIR>/AGENT.md` if it exists — it contains project-specific commands and gotchas discovered in previous iterations.
 
 **2. Smoke test**

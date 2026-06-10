@@ -313,4 +313,15 @@ EOF
 done
 
 local_ok "materialize: wrote $WROTE, skipped $SKIPPED, local-generation failures $FAILED"
+
+# ── Surface skeleton packets (FR-006, audit B2) ──────────────────────────────
+# Skeletons are full of "- UNKNOWN" bullets; downstream must not treat them as
+# authoritative. Count and warn, plus one structured skip event (best-effort).
+read -r UNK_MARKERS UNK_FILES PKT_FILES <<<"$(local_count_unknown_markers "$PACKETS_DIR")"
+if [[ "${UNK_MARKERS:-0}" -gt 0 ]]; then
+  local_warn "$UNK_MARKERS UNKNOWN markers across $UNK_FILES/$PKT_FILES packets — packets are skeletons; treat tasks.md + sprint contract as authoritative."
+  bash "$SCRIPT_DIR/pro-report.sh" event skip "-" materialize 4b environment-unavailable \
+    "$UNK_MARKERS UNKNOWN markers across $UNK_FILES/$PKT_FILES packets (local model unavailable)" \
+    >/dev/null 2>&1 || true
+fi
 exit 0

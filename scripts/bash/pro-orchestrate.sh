@@ -174,9 +174,16 @@ count_tasks() {
   # two-line "0\n0" value that breaks the `-eq` arithmetic downstream (caught in
   # eval: completion was never detected on a fully-done tasks.md). Anchor both the
   # x and X branches so an inline `- [X]` in prose can't inflate the count.
-  local completed total
-  completed=$(grep -cE '^[[:space:]]*- \[[xX]\]' "$TASKS_PATH" 2>/dev/null); completed=${completed:-0}
-  total=$(grep -cE '^[[:space:]]*- \[[ xX]\]' "$TASKS_PATH" 2>/dev/null); total=${total:-0}
+  #
+  # Race-free counting (audit C6): read tasks.md ONCE and count both patterns
+  # from the same snapshot — two separate file greps could straddle a concurrent
+  # agent write and report an impossible completed/total pair.
+  local content completed total
+  content=$(cat "$TASKS_PATH" 2>/dev/null) || content=""
+  completed=$(printf '%s\n' "$content" | grep -cE '^[[:space:]]*- \[[xX]\]') || true
+  completed=${completed:-0}
+  total=$(printf '%s\n' "$content" | grep -cE '^[[:space:]]*- \[[ xX]\]') || true
+  total=${total:-0}
   echo "$completed $total"
 }
 
@@ -186,14 +193,61 @@ all_tasks_done() {
   [[ "$incomplete" -eq 0 ]]
 }
 
+# Reads commit.commit_artifacts from pro-config (awk section walker — same
+# no-dependency pattern as pro-resume-detect.sh; pro-report.sh's python walker
+# is overkill for one boolean). Precedence mirrors report_resolve_config.
+# Returns 0 (true) only on an explicit `commit_artifacts: true`; default false.
+# NOTE: PROJECT_ROOT is only set when --knowledge-feature-dir was NOT passed,
+# so resolve the root locally here.
+commit_artifacts_enabled() {
+  local root cfg v
+  root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  for cfg in "$root/.specify/extensions/pro/pro-config.local.yml" \
+             "$root/.specify/extensions/pro/pro-config.yml" \
+             "$root/pro-config.yml"; do
+    if [[ -f "$cfg" ]]; then
+      v=$(awk '/^commit:/{f=1;next} f&&/^[^ ]/{f=0} f&&/^[[:space:]]*commit_artifacts:/{gsub(/["'"'"']/,"",$2); print $2; exit}' "$cfg" 2>/dev/null)
+      if [[ -n "$v" ]]; then
+        [[ "$v" == "true" ]] && return 0
+        return 1
+      fi
+    fi
+  done
+  return 1
+}
+
 checkpoint_commit() {
   local label="$1" completed="$2" total="$3"
   if git rev-parse --is-inside-work-tree &>/dev/null; then
-    git add . 2>/dev/null || true
+    # Scoped staging (audit B3 / FR-007): never a blanket `git add .` — workspace
+    # state must stay out of feature-branch commits. .knowledge/features and
+    # .knowledge/metrics are ALWAYS excluded (machine-generated, per the
+    # commit.commit_artifacts config contract); specs/ is excluded unless the
+    # operator opted in with commit_artifacts: true.
+    local stage_rc=0
+    if commit_artifacts_enabled; then
+      git add -A -- . ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null || stage_rc=$?
+    else
+      git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null || stage_rc=$?
+    fi
+    if [[ "$stage_rc" -ne 0 ]]; then
+      log_error "checkpoint staging failed: $(git status -s 2>/dev/null | head -1)"
+      return 1
+    fi
     if ! git diff --cached --quiet 2>/dev/null; then
-      local hash
+      # Verified commit (audit B4): check the exit code — a silent `2>/dev/null`
+      # commit failure used to be followed by an unconditional log_success.
+      local hash commit_rc=0
       git commit -m "[Pro] Checkpoint: $label ($completed/$total tasks, feature: $FEATURE_NAME)" \
-        2>/dev/null
+        2>/dev/null || commit_rc=$?
+      if [[ "$commit_rc" -ne 0 ]]; then
+        local status_snippet
+        status_snippet=$(git status -s 2>/dev/null | head -3 | tr '\n' ' ')
+        log_error "Checkpoint commit failed (rc $commit_rc): $status_snippet"
+        # Best-effort error event — telemetry must never abort the loop.
+        [ -f "$PRO_REPORT" ] && bash "$PRO_REPORT" event skip "${RUN_ID:--}" checkpoint loop error "git commit failed: $status_snippet" >/dev/null 2>&1 || true
+        return 1
+      fi
       hash=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
       log_success "Checkpoint committed: $label ($hash)"
       echo "### Checkpoint ✓ — $label" >> "$PROGRESS_FILE"
@@ -210,6 +264,9 @@ checkpoint_commit() {
 
 init_progress_file() {
   if [[ ! -f "$PROGRESS_FILE" ]]; then
+    # Guard the parent dir (audit B9) — degrade with a warning, never abort.
+    mkdir -p "$(dirname "$PROGRESS_FILE")" 2>/dev/null \
+      || log_warn "Could not create $(dirname "$PROGRESS_FILE") — progress logging degraded"
     cat > "$PROGRESS_FILE" << EOF
 # Implementation Progress Log
 
@@ -224,6 +281,9 @@ EOF
 
 update_session() {
   local phase="$1" status="$2" notes="$3"
+  # Guard the parent dir (audit B9) — degrade with a warning, never abort.
+  mkdir -p "$(dirname "$SESSION_FILE")" 2>/dev/null \
+    || log_warn "Could not create $(dirname "$SESSION_FILE") — session logging degraded"
   if [[ ! -f "$SESSION_FILE" ]]; then
     cat > "$SESSION_FILE" << EOF
 # Session State

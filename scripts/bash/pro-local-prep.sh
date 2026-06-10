@@ -21,6 +21,18 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # shellcheck source=lib/pro-local-common.sh
 source "$SCRIPT_DIR/lib/pro-local-common.sh"
 
+# ── Structured skip events (FR-004, audit B1) ────────────────────────────────
+# Every self-skip/degradation emits one structured event so the run report can
+# tell "disabled by config" from "sidecar down" from "driver error". Run-id "-"
+# auto-resolves via the .current pointer (or spools pre-run). Best-effort:
+# never fails, never adds noise.
+# Usage: prep_skip_event <reason_class> <detail>
+#        reason_class: disabled-by-config | environment-unavailable | error
+prep_skip_event() {
+  bash "$SCRIPT_DIR/pro-report.sh" event skip "-" local-prep "4b" "$1" "$2" \
+    >/dev/null 2>&1 || true
+}
+
 # ── Args ─────────────────────────────────────────────────────────────────────
 SPEC_DIR=""
 ONLY=""
@@ -75,17 +87,23 @@ local_load_config "$PROJECT_ROOT"
 LOCAL_FEATURE="$(local_feature_from_spec_dir "$SPEC_DIR")"
 
 if [[ "$LOCAL_ENABLED" != "true" ]]; then
-  local_log "local_models.enabled is false — skipping local prep."
+  local_log "local prep is disabled by config — skipping (this is opt-in, not an error)."
   local_log "  Config: $LOCAL_CONFIG_PATH"
-  local_log "  To enable: set local_models.enabled: true in pro-config.yml."
+  local_log "  set local_models.enabled: true to use"
+  if [[ "$LOCAL_CONFIG_PATH" == "$LOCAL_EXTENSION_ROOT/pro-config.template.yml" ]]; then
+    prep_skip_event disabled-by-config "no pro-config found; local_models defaulting off"
+  else
+    prep_skip_event disabled-by-config "local_models.enabled=false in $(basename "$LOCAL_CONFIG_PATH")"
+  fi
   exit 0
 fi
 
 if ! local_check_reachable; then
-  local_warn "Ollama not reachable at $LOCAL_BASE_URL — skipping local prep."
-  local_warn "  Start it:   ollama serve"
-  local_warn "  Or disable: set local_models.enabled: false"
+  local_warn "Ollama not reachable at $LOCAL_BASE_URL — skipping local prep (config enables it, but the sidecar is down)."
+  local_warn "  Check the endpoint:  curl $LOCAL_BASE_URL/api/tags  (is base_url right? is the model pulled?)"
+  local_warn "  Start it:            ollama serve"
   local_emit_skip pro-local-prep ollama-unreachable "{\"base_url\":\"$LOCAL_BASE_URL\"}"
+  prep_skip_event environment-unavailable "Ollama unreachable at $LOCAL_BASE_URL"
   exit 0
 fi
 
@@ -146,6 +164,7 @@ run_one() {
   fi
 
   local_log "$(printf "%-22s → %s  [model=%s]" "$task" "$(basename "$out")" "$model")"
+  ATTEMPTS=$((ATTEMPTS + 1))
   if local_run_task "$task" "$prompt" "$out" "$@"; then
     local_ok "wrote $(basename "$out")"
     return 0
@@ -164,6 +183,7 @@ local_print_summary "local-prep" \
   "Models   : default=$LOCAL_MODEL_DEFAULT  code=$LOCAL_MODEL_CODE  fast=$LOCAL_MODEL_FAST"
 
 FAILURES=0
+ATTEMPTS=0
 
 # Stage 1: repo-map.md (needed by later stages; produce first)
 if should_run repo-map; then
@@ -219,6 +239,15 @@ if (( FAILURES == 0 )); then
   exit 0
 else
   local_warn "local-prep finished with $FAILURES failure(s) — see warnings above."
+  # FR-004: ONE aggregated event for per-artifact failures, with the right
+  # reason class. All prep tasks route to LOCAL_MODEL_DEFAULT, so if that
+  # model isn't pulled (the HTTP 404 case ollama-md.py logs), this is an
+  # environment problem — not a driver bug.
+  if ! local_model_present "$LOCAL_MODEL_DEFAULT"; then
+    prep_skip_event environment-unavailable "model '$LOCAL_MODEL_DEFAULT' not found at $LOCAL_BASE_URL — $FAILURES of $ATTEMPTS prep artifacts failed (pull it: ollama pull $LOCAL_MODEL_DEFAULT)"
+  else
+    prep_skip_event error "$FAILURES of $ATTEMPTS prep artifacts failed (see warnings)"
+  fi
   # Still exit 0: this is augmentation, not a blocker.
   exit 0
 fi

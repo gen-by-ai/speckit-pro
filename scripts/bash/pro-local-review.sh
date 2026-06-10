@@ -23,6 +23,18 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # shellcheck source=lib/pro-local-common.sh
 source "$SCRIPT_DIR/lib/pro-local-common.sh"
 
+# ── Structured skip events (FR-004) ──────────────────────────────────────────
+# Every self-skip/degradation emits one structured event so the run report can
+# tell "disabled by config" from "sidecar down" from "review error". Run-id "-"
+# auto-resolves via the .current pointer (or spools pre-run). Best-effort:
+# never fails, never adds noise.
+# Usage: review_skip_event <reason_class> <detail>
+#        reason_class: disabled-by-config | environment-unavailable | error
+review_skip_event() {
+  bash "$SCRIPT_DIR/pro-report.sh" event skip "-" local-review "6b" "$1" "$2" \
+    >/dev/null 2>&1 || true
+}
+
 SPEC_DIR=""
 BASE_REF=""
 ONLY=""
@@ -66,12 +78,28 @@ local_load_config "$PROJECT_ROOT"
 LOCAL_FEATURE="$(local_feature_from_spec_dir "$SPEC_DIR")"
 
 if [[ "$LOCAL_ENABLED" != "true" ]]; then
-  local_log "local_models.enabled is false — skipping local review."
+  local_log "local review is disabled by config — skipping (this is opt-in, not an error)."
+  local_log "  Config: $LOCAL_CONFIG_PATH"
+  local_log "  Fix:    set local_models.enabled: true in pro-config.yml"
+  if [[ "$LOCAL_CONFIG_PATH" == "$LOCAL_EXTENSION_ROOT/pro-config.template.yml" ]]; then
+    review_skip_event disabled-by-config "no pro-config found; local_models defaulting off"
+  else
+    review_skip_event disabled-by-config "local_models.enabled=false in $(basename "$LOCAL_CONFIG_PATH")"
+  fi
+  exit 0
+fi
+TASK_SWITCH="$(local_config_get local_models.tasks.local_review "$LOCAL_CONFIG_PATH")"
+if [[ "$TASK_SWITCH" == "false" ]]; then
+  local_log "local review is disabled by config — skipping (this is opt-in, not an error)."
+  local_log "  Fix: set local_models.tasks.local_review: true in $(basename "$LOCAL_CONFIG_PATH")"
+  review_skip_event disabled-by-config "local_models.tasks.local_review=false in $(basename "$LOCAL_CONFIG_PATH")"
   exit 0
 fi
 if ! local_check_reachable; then
-  local_warn "Ollama not reachable at $LOCAL_BASE_URL — skipping local review."
+  local_warn "Ollama not reachable at $LOCAL_BASE_URL — skipping local review (config enables it, but the sidecar is down)."
+  local_warn "  Fix: start it with 'ollama serve' — or check the endpoint: curl $LOCAL_BASE_URL/api/tags"
   local_emit_skip pro-local-review ollama-unreachable "{\"base_url\":\"$LOCAL_BASE_URL\"}"
+  review_skip_event environment-unavailable "Ollama unreachable at $LOCAL_BASE_URL"
   exit 0
 fi
 
@@ -138,12 +166,25 @@ run_review() {
     return 0
   fi
   local_log "$(printf "%-22s → %s  [model=%s]" "$task" "$(basename "$out")" "$model")"
+  ATTEMPTED=$(( ATTEMPTED + 1 ))
   if local_run_task "$task" "$prompt" "$out" "$@"; then
     local_ok "wrote $(basename "$out")"
     return 0
   else
     local rc=$?
-    local_warn "$task failed (exit $rc) — continuing."
+    # Exit 3 = Ollama answered with an error; if the model is absent from
+    # /api/tags this is the HTTP 404 model-not-found case — an environment
+    # problem, not a review error. Emit once per missing model.
+    if [[ "$rc" -eq 3 ]] && ! local_model_present "$model"; then
+      local_warn "$task failed — model '$model' is not pulled (HTTP 404). Fix: ollama pull $model"
+      if [[ "$MISSING_MODELS" != *" $model "* ]]; then
+        MISSING_MODELS="$MISSING_MODELS$model "
+        review_skip_event environment-unavailable "model '$model' not found on Ollama (HTTP 404) at $LOCAL_BASE_URL"
+      fi
+    else
+      ERR_FAILED=$(( ERR_FAILED + 1 ))
+      local_warn "$task failed (exit $rc) — continuing."
+    fi
     return "$rc"
   fi
 }
@@ -153,7 +194,10 @@ local_print_summary "local-review" \
   "Diff base: $BASE_REF" \
   "Models   : code=$LOCAL_MODEL_CODE  review=$LOCAL_MODEL_REVIEW  security=$LOCAL_MODEL_SECURITY"
 
-FAILURES=0
+FAILURES=0        # all failed artifacts (drives the human-readable summary)
+ATTEMPTED=0       # generations actually invoked (exists-skip / dry-run excluded)
+ERR_FAILED=0      # failures NOT attributable to a missing model (→ one aggregated error event)
+MISSING_MODELS=" "  # space-delimited dedupe list for 404 model-not-found events
 
 if should_run implementation-review; then
   args=( "$DIFF_FILE" "$CHANGED_FILES" )
@@ -181,6 +225,11 @@ if (( FAILURES == 0 )); then
   local_ok "local-review complete — see $SPEC_DIR/local-reviews/"
 else
   local_warn "local-review finished with $FAILURES failure(s)."
+  # ONE aggregated error event for failures that weren't classified as
+  # environment-unavailable above (FR-004: every degradation is recorded).
+  if (( ERR_FAILED > 0 )); then
+    review_skip_event error "$ERR_FAILED of $ATTEMPTED review artifacts failed"
+  fi
 fi
 
 exit 0

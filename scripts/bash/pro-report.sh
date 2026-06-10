@@ -40,6 +40,11 @@
 #   - python3 is a hard engine dependency — used for all JSON read/write + report assembly.
 #   - Never abort the pipeline: every failure degrades to a partial report + a warning.
 #   - All state lives under gitignored .knowledge/metrics/ — PR-safe.
+#     SPECKIT_PRO_METRICS_DIR overrides the metrics root (hermetic tests / sandboxes).
+#   - Run lifecycle: start writes status:"open"; finish closes it to "finished"; a later
+#     start's orphan sweep closes abandoned "open" records as "interrupted". Manifest
+#     mutations are flock-guarded read-modify-writes (concurrent writers lose nothing).
+#   - .current is a single-run convenience fallback; concurrent runs pass --run-id.
 # =============================================================================
 
 set -uo pipefail
@@ -61,7 +66,8 @@ else
 fi
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-METRICS_DIR="$PROJECT_ROOT/.knowledge/metrics"
+# SPECKIT_PRO_METRICS_DIR overrides the metrics root (hermetic tests / sandboxes).
+METRICS_DIR="${SPECKIT_PRO_METRICS_DIR:-$PROJECT_ROOT/.knowledge/metrics}"
 RUNS_DIR="$METRICS_DIR/runs"
 RUNS_LOG="$METRICS_DIR/runs.jsonl"
 FANOUT_METRICS="$METRICS_DIR/fanout-metrics.jsonl"
@@ -203,6 +209,34 @@ cmd_start() {
   local stamp; stamp="$(date -u +"%Y%m%d-%H%M%S")"
   [[ -z "$run_id" ]] && run_id="run-${stamp}-$(printf '%04x' $(( RANDOM )))"
 
+  # ── Orphan sweep: close prior runs left "open" as "interrupted" (FR-003) ──
+  # flock CAS per manifest: only an open record transitions — exactly one closer
+  # wins; finished and legacy status-less records are never touched.
+  if have_py; then
+    NEWRUN="$run_id" NOW_ISO="$(fanout_now_iso)" python3 - "$RUNS_DIR" <<'PY' || fanout_warn "start: orphan sweep failed (continuing)"
+import fcntl, glob, json, os, sys
+runs_dir = sys.argv[1]
+for p in glob.glob(os.path.join(runs_dir, "*.json")):
+    try:
+        with open(p, "r+", encoding="utf-8") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                d = json.load(fh)
+            except Exception:
+                continue
+            if d.get("status") == "open":
+                d["status"] = "interrupted"
+                d["interrupted_at"] = os.environ.get("NOW_ISO")
+                d["interrupted_by"] = os.environ.get("NEWRUN")
+                fh.seek(0)
+                fh.truncate()
+                json.dump(d, fh, indent=2)
+                print("[report] orphan sweep: closed %s as interrupted" % os.path.basename(p), file=sys.stderr)
+    except Exception:
+        continue
+PY
+  fi
+
   local started_s started_iso branch head
   started_s="$(fanout_now_s)"; started_iso="$(fanout_now_iso)"
   branch="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
@@ -215,6 +249,7 @@ import json, os, sys
 rec = {
   "run_id": os.environ["RUN"],
   "feature": os.environ.get("FEAT") or None,
+  "status": "open",
   "started_at": os.environ["SI"],
   "started_at_s": int(os.environ["SS"]),
   "start_branch": os.environ["BR"],
@@ -224,10 +259,45 @@ with open(sys.argv[1], "w", encoding="utf-8") as fh:
     json.dump(rec, fh, indent=2)
 PY
   else
-    printf '{"run_id":"%s","started_at":"%s","started_at_s":%s,"start_head":"%s"}\n' \
+    printf '{"run_id":"%s","status":"open","started_at":"%s","started_at_s":%s,"start_head":"%s"}\n' \
       "$run_id" "$started_iso" "$started_s" "$head" > "$RUNS_DIR/$run_id.json"
   fi
-  printf '%s\n' "$run_id" > "$RUNS_DIR/.current"
+  # .current is a single-run convenience fallback ONLY — concurrent runs must pass
+  # run-ids explicitly (both /pro.go and the orchestrator do). Written atomically.
+  printf '%s\n' "$run_id" > "$RUNS_DIR/.current.$$" && mv "$RUNS_DIR/.current.$$" "$RUNS_DIR/.current"
+
+  # ── Adopt skip events spooled before this run existed (pending-skips.jsonl) ──
+  if [[ -f "$RUNS_DIR/pending-skips.jsonl" ]] && have_py; then
+    python3 - "$RUNS_DIR/$run_id.json" "$RUNS_DIR/pending-skips.jsonl" <<'PY' || fanout_warn "start: pending-skips adoption failed (spool kept)"
+import fcntl, json, os, sys
+mf, spool = sys.argv[1], sys.argv[2]
+events, dropped = [], 0
+for ln in open(spool, encoding="utf-8"):
+    ln = ln.strip()
+    if not ln:
+        continue
+    try:
+        events.append(json.loads(ln))
+    except Exception:
+        dropped += 1
+with open(mf, "r+", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    d = json.load(fh)
+    for ev in events:
+        # Route by shape: decision events carry "gate"; everything else is a skip.
+        key = "decisions" if "gate" in ev else "skips"
+        if not isinstance(d.get(key), list):
+            d[key] = []
+        d[key].append(ev)
+    fh.seek(0)
+    fh.truncate()
+    json.dump(d, fh, indent=2)
+os.unlink(spool)
+if events or dropped:
+    print("[report] adopted %d pending skip(s)%s" % (
+        len(events), (", dropped %d malformed" % dropped) if dropped else ""), file=sys.stderr)
+PY
+  fi
 
   fanout_log "run-report: started run ${run_id} on branch ${branch} at ${started_iso}"
   # stdout = the run id, so the caller can capture it cleanly.
@@ -256,22 +326,25 @@ cmd_phase() {
   now_iso="$(fanout_now_iso)"; now_s="$(fanout_now_s)"
   PH="$phase_name" EV="$event" TI="$now_iso" TS="$now_s" \
     python3 - "$manifest" <<'PY' || { fanout_warn "phase: read-modify-write failed for $run_id"; exit 0; }
-import json, os, sys
+import fcntl, json, os, sys
 mf = sys.argv[1]
-try:
-    with open(mf, encoding="utf-8") as fh:
+# flock-guarded read-modify-write: concurrent phase/call writers must never lose entries.
+with open(mf, "r+", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    try:
         d = json.load(fh)
-except Exception:
-    d = {}
-if not isinstance(d.get("phases"), list):
-    d["phases"] = []
-d["phases"].append({
-    "phase": os.environ["PH"],
-    "event": os.environ["EV"],
-    "ts": os.environ["TI"],
-    "ts_s": int(os.environ["TS"]),
-})
-with open(mf, "w", encoding="utf-8") as fh:
+    except Exception:
+        d = {}
+    if not isinstance(d.get("phases"), list):
+        d["phases"] = []
+    d["phases"].append({
+        "phase": os.environ["PH"],
+        "event": os.environ["EV"],
+        "ts": os.environ["TI"],
+        "ts_s": int(os.environ["TS"]),
+    })
+    fh.seek(0)
+    fh.truncate()
     json.dump(d, fh, indent=2)
 PY
   fanout_log "phase: $event $phase_name (run $run_id)"
@@ -320,7 +393,7 @@ cmd_call() {
   TURNS="$f_turns" DUR="$f_dur" SESSION="$f_session" SOURCE="$f_source" \
   REWORK="$f_rework" INTERVENTION="$f_intervention" CBTRIP="$f_cbtrip" \
     python3 - "$manifest" <<'PY' || { fanout_warn "call: read-modify-write failed for $run_id"; exit 0; }
-import json, os, sys
+import fcntl, json, os, sys
 mf = sys.argv[1]
 g = os.environ.get
 def s_or_null(k):
@@ -339,13 +412,6 @@ def num_or_null(k):
             return float(v)
         except Exception:
             return None
-try:
-    with open(mf, encoding="utf-8") as fh:
-        d = json.load(fh)
-except Exception:
-    d = {}
-if not isinstance(d.get("calls"), list):
-    d["calls"] = []
 entry = {
     "ts": g("TI"),
     "phase": s_or_null("PHASE"),
@@ -363,8 +429,18 @@ entry = {
     "intervention": (g("INTERVENTION") == "1"),
     "cb_trip": (g("CBTRIP") == "1"),
 }
-d["calls"].append(entry)
-with open(mf, "w", encoding="utf-8") as fh:
+# flock-guarded read-modify-write (same rule as cmd_phase): no lost entries.
+with open(mf, "r+", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    try:
+        d = json.load(fh)
+    except Exception:
+        d = {}
+    if not isinstance(d.get("calls"), list):
+        d["calls"] = []
+    d["calls"].append(entry)
+    fh.seek(0)
+    fh.truncate()
     json.dump(d, fh, indent=2)
 PY
   fanout_log "call: recorded call for run $run_id (phase ${f_phase:-?}, status ${f_status:-?})"
@@ -698,7 +774,12 @@ completion_state = d.get("completion_state") or None
 expected = [total_cost_usd, tokens, turns, session_id, completion_state]
 telemetry_complete = bool(calls) and all(x is not None for x in expected) and bool(per_phase_durations_s)
 
+skips     = d.get("skips")     if isinstance(d.get("skips"),     list) else []
+decisions = d.get("decisions") if isinstance(d.get("decisions"), list) else []
+
 blob = {
+    "skips": skips,
+    "decisions": decisions,
     "per_phase_durations_s": per_phase_durations_s,
     "total_cost_usd": total_cost_usd,
     "tokens": tokens,
@@ -850,6 +931,35 @@ lines.append("- **Human interventions**: %s · **rework**: %s · **circuit-break
     fmt_or_unavail(telem.get("rework_count")),
     fmt_or_unavail(telem.get("circuit_breaker_trips"))))
 lines.append("")
+# ── 🚦 Capability skips + auto-decisions (FR-005/FR-014: zero silent skips) ──
+_skips = telem.get("skips") or []
+_decisions = telem.get("decisions") or []
+lines.append("## 🚦  Capability skips")
+lines.append("")
+if _skips:
+    lines.append("| When | Capability | Phase | Reason | Detail |")
+    lines.append("|---|---|---|---|---|")
+    for s in _skips:
+        if isinstance(s, dict):
+            lines.append("| %s | %s | %s | %s | %s |" % (
+                s.get("ts", "?"), s.get("capability", "?"), s.get("phase") or "—",
+                s.get("reason_class", "?"), (s.get("detail") or "").replace("|", "\\|")))
+else:
+    lines.append("_none — every enabled capability ran._")
+lines.append("")
+lines.append("## 🤖  Decisions (auto-applied)")
+lines.append("")
+if _decisions:
+    lines.append("| When | Gate | Action | Detail |")
+    lines.append("|---|---|---|---|")
+    for s in _decisions:
+        if isinstance(s, dict):
+            lines.append("| %s | %s | %s | %s |" % (
+                s.get("ts", "?"), s.get("gate", "?"), s.get("action", "?"),
+                (s.get("detail") or "").replace("|", "\\|")))
+else:
+    lines.append("_none — no unattended defaults were applied._")
+lines.append("")
 lines.append("## 🔧  Where to improve")
 lines.append("")
 lines.append(notes)
@@ -891,14 +1001,42 @@ summary["cli"]                   = telem.get("cli")
 summary["models"]                = telem.get("models")
 summary["completion_state"]      = telem.get("completion_state")
 summary["telemetry_complete"]    = bool(telem.get("telemetry_complete"))
+summary["skip_count"]            = len(telem.get("skips") or [])
+summary["decision_count"]        = len(telem.get("decisions") or [])
 os.makedirs(os.path.dirname(g("RUNSLOG")), exist_ok=True)
+# flock-guarded append: concurrent finishers must never interleave lines.
+import fcntl
 with open(g("RUNSLOG"), "a", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     fh.write(json.dumps(summary) + "\n")
 print(g("REPORT"))
 PY
   fi
   rm -f "$notes_file" 2>/dev/null
   rm -f "$telem_file" 2>/dev/null
+
+  # ── Close the run record: open → finished (flock CAS; legacy manifests tolerated) ──
+  if [[ -n "$run_id" && -f "$manifest" ]] && have_py; then
+    FI_TS="$(fanout_now_iso)" python3 - "$manifest" <<'PY' || fanout_warn "finish: could not set status=finished for $run_id"
+import fcntl, json, os, sys
+mf = sys.argv[1]
+with open(mf, "r+", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    try:
+        d = json.load(fh)
+    except Exception:
+        sys.exit(1)
+    # finish always wins: "interrupted" is a sweep's presumption of death; a run
+    # that actually finishes proves it wrong and overrides it. Only "finished"
+    # itself is terminal.
+    if d.get("status") in (None, "open", "interrupted"):
+        d["status"] = "finished"
+        d["finished_at"] = os.environ.get("FI_TS")
+        fh.seek(0)
+        fh.truncate()
+        json.dump(d, fh, indent=2)
+PY
+  fi
 
   fanout_ok "run-report: wrote $report_path  (duration $dur_h · ${files_changed} files · ${commits} commits · ${tasks_done}/${tasks_total} tasks · eval ${eval_verdict}${eval_score:+ $eval_score})"
 
@@ -938,7 +1076,7 @@ cmd_aggregate() {
     return 0
   fi
   have_py || { fanout_err "python3 required for aggregate"; return 1; }
-  LAST="$last" ASJSON="$as_json" python3 - "$RUNS_LOG" <<'PY'
+  LAST="$last" ASJSON="$as_json" RUNSDIR="$RUNS_DIR" python3 - "$RUNS_LOG" <<'PY'
 import json, sys
 rows = []
 for ln in open(sys.argv[1], encoding="utf-8"):
@@ -981,12 +1119,24 @@ par_on = sum(1 for r in rows if r.get("parallel") == "on")
 spds   = [r["speedup"] for r in rows if isinstance(r.get("speedup"), (int,float))]
 lfails = sum(r.get("local_fail",0) or 0 for r in rows)
 
+# Interrupted-run count (orphan sweep closures; manifests never reach runs.jsonl)
+import glob
+_interrupted = 0
+for _p in glob.glob(os.path.join(os.environ.get("RUNSDIR", ""), "*.json")):
+    try:
+        if json.load(open(_p, encoding="utf-8")).get("status") == "interrupted":
+            _interrupted += 1
+    except Exception:
+        pass
+
 print("\n── Averages ──")
 print("  avg duration : %s" % fmtdur(avg(durs)))
 print("  avg eval     : %s" % ("%.1f" % avg(scores) if scores else "n/a"))
 print("  avg iters    : %s" % ("%.1f" % avg(iters) if iters else "n/a"))
 print("  PASS rate    : %d/%d" % (passes, len(rows)))
 print("  parallel used: %d/%d runs" % (par_on, len(rows)))
+if _interrupted:
+    print("  interrupted  : %d run(s) closed by the orphan sweep (never finished)" % _interrupted)
 if spds: print("  avg speedup  : %.2fx" % avg(spds))
 
 # Trend on eval score (first half vs second half).
@@ -1048,12 +1198,88 @@ PY
 }
 
 # =============================================================================
-# event — thin telemetry logger for the in-harness loop
+# event — thin telemetry logger for the in-harness loop, plus structured
+#         skip/decision events (FR-004/FR-014):
+#   event skip     <run_id|-> <capability> <phase> <reason_class> [detail]
+#   event decision <run_id|-> <gate> <action> [detail]
+# Empty/"-" run-id falls back to .current; with neither, the event spools to
+# pending-skips.jsonl (adopted by the next start) — never lost, never fatal.
 # =============================================================================
+_event_record() { # _event_record <kind> <run_id> <json-payload-via-EV_JSON>
+  local kind="$1" run_id="$2"
+  [[ -z "$run_id" || "$run_id" == "-" ]] && run_id="$(cat "$RUNS_DIR/.current" 2>/dev/null)"
+  local manifest="$RUNS_DIR/$run_id.json"
+  mkdir -p "$RUNS_DIR" 2>/dev/null
+  have_py || { fanout_warn "event $kind: python3 unavailable — dropped"; return 0; }
+  if [[ -n "$run_id" && -f "$manifest" ]]; then
+    KIND="$kind" python3 - "$manifest" <<'PY' || fanout_warn "event: manifest append failed"
+import fcntl, json, os, sys
+mf = sys.argv[1]
+entry = json.loads(os.environ["EV_JSON"])
+key = "decisions" if os.environ.get("KIND") == "decision" else "skips"
+with open(mf, "r+", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    try:
+        d = json.load(fh)
+    except Exception:
+        d = {}
+    if not isinstance(d.get(key), list):
+        d[key] = []
+    d[key].append(entry)
+    fh.seek(0)
+    fh.truncate()
+    json.dump(d, fh, indent=2)
+PY
+  else
+    # Pre-run (or unknown-run) event: spool; the next start adopts it.
+    python3 - "$RUNS_DIR/pending-skips.jsonl" <<'PY' || fanout_warn "event: spool append failed"
+import fcntl, json, os, sys
+entry = json.loads(os.environ["EV_JSON"])
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    fh.write(json.dumps(entry) + "\n")
+PY
+  fi
+}
+
 cmd_event() {
-  local event="${1:-}" run_id="${2:-}" portion="${3:-}" substrate="${4:-in-harness}" dur="${5:-}" err="${6:-}"
-  [[ -z "$event" || -z "$run_id" ]] && { fanout_err "usage: pro-report.sh event <event> <run_id> <portion> <substrate> [dur_ms] [err]"; return 2; }
-  fanout_telemetry "$FANOUT_METRICS" "$event" "$run_id" "$portion" "$substrate" "$dur" "$err"
+  local event="${1:-}"
+  case "$event" in
+    skip)
+      local run_id="${2:-}" cap="${3:-}" phase="${4:-}" rclass="${5:-}" detail="${6:-}"
+      [[ -z "$cap" || -z "$rclass" ]] && { fanout_err "usage: pro-report.sh event skip <run_id|-> <capability> <phase> <reason_class> [detail]"; return 2; }
+      case "$rclass" in
+        disabled-by-config|environment-unavailable|error) ;;
+        *) fanout_warn "event skip: unknown reason_class '$rclass' (recording anyway)" ;;
+      esac
+      EV_JSON="$(TS="$(fanout_now_iso)" CAP="$cap" PH="$phase" RC="$rclass" DT="$detail" python3 -c '
+import json, os
+print(json.dumps({"ts": os.environ["TS"], "capability": os.environ["CAP"],
+  "phase": os.environ.get("PH") or None, "reason_class": os.environ["RC"],
+  "detail": (os.environ.get("DT") or "")[:200]}))')" || return 0
+      export EV_JSON
+      _event_record skip "$run_id"
+      unset EV_JSON
+      fanout_log "skip event: $cap ($rclass)${detail:+ — $detail}"
+      ;;
+    decision)
+      local run_id="${2:-}" gate="${3:-}" action="${4:-}" detail="${5:-}"
+      [[ -z "$gate" || -z "$action" ]] && { fanout_err "usage: pro-report.sh event decision <run_id|-> <gate> <action> [detail]"; return 2; }
+      EV_JSON="$(TS="$(fanout_now_iso)" GA="$gate" AC="$action" DT="$detail" python3 -c '
+import json, os
+print(json.dumps({"ts": os.environ["TS"], "gate": os.environ["GA"],
+  "action": os.environ["AC"], "detail": (os.environ.get("DT") or "")[:200]}))')" || return 0
+      export EV_JSON
+      _event_record decision "$run_id"
+      unset EV_JSON
+      fanout_log "decision event: $gate → $action"
+      ;;
+    *)
+      local run_id="${2:-}" portion="${3:-}" substrate="${4:-in-harness}" dur="${5:-}" err="${6:-}"
+      [[ -z "$event" || -z "$run_id" ]] && { fanout_err "usage: pro-report.sh event <event> <run_id> <portion> <substrate> [dur_ms] [err]"; return 2; }
+      fanout_telemetry "$FANOUT_METRICS" "$event" "$run_id" "$portion" "$substrate" "$dur" "$err"
+      ;;
+  esac
 }
 
 # =============================================================================
