@@ -578,7 +578,7 @@ Two execution modes. The mode is chosen per work-unit; default is serial (byte-f
 **Parallel path (opt-in — real multi-agent fan-out).** This is the engine that was previously only wired into `/pro.scan` (analyze pre-pass); here it parallelizes *implementation*:
 
 1. Collect the disjoint `[P]` tasks in this work-unit into a worker set. Determine the worker count: `parallel.workers.in_harness` else `min(16, cores−2)`; clamp the worker set to that ceiling (queue the rest).
-2. **Dispatch one sub-agent per `[P]` task, concurrently** (use the Agent tool — same in-harness substrate as `/pro.scan` step 2). Give each sub-agent: the task line + its acceptance criteria from the sprint contract, the relevant task-packet (`task-packets/TASK-<id>-*.md` if present), and `AGENT.md`. Instruct each to implement **only its task's files**, verify acceptance criteria, and return **only** a JSON object per the Worker Result Envelope (`specs/003-autonomy-reliability-hardening/contracts/worker-result.schema.json` — shipped with Pro):
+2. **Dispatch one sub-agent per `[P]` task, concurrently** (use the Agent tool — same in-harness substrate as `/pro.scan` step 2). Give each sub-agent: the task line + its acceptance criteria from the sprint contract, the relevant task-packet (`task-packets/TASK-<id>-*.md` if present), and `AGENT.md`. Instruct each to implement **only its task's files**, verify acceptance criteria, and return **only** a JSON object matching the Worker Result Envelope. The inline example below is the normative shape; the canonical JSON Schema ships as `worker-result.schema.json` under the extension's `schemas` templates (`.specify/extensions/pro/templates/schemas/worker-result.schema.json` in installed projects):
 
 ```json
 {"task_id": "T012", "status": "pass|fail|timeout", "files": ["..."], "tests_run": ["..."], "uncertainties": ["..."], "notes": "..."}
@@ -630,10 +630,10 @@ Write `<SPEC_DIR>/handoff.md` (≤400 words). See `pro.loop.md` Handoff Artifact
 
 **8. Checkpoint commit**
 
-If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete (scoped staging per FR-007 — never blanket-stage; verify the commit):
+If `N % <loop.checkpoint_frequency> == 0` OR all tasks are complete (scoped staging per FR-007 — never blanket-stage; verify the commit). Stage broadly, then **de-stage** workspace paths — never use `:(exclude)` pathspecs for these dirs (naming a gitignored or partly-ignored dir there makes `git add` exit 1 with the addIgnoredFile advice; `git reset -- <path>` is a clean no-op when nothing under the path is staged):
 ```bash
-git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics'
-# (when commit.commit_artifacts: true, drop only the specs exclusion)
+git add -A -- .
+git reset -q -- specs .knowledge/features .knowledge/metrics   # keep specs staged when commit.commit_artifacts: true
 git commit -m "[Pro] Checkpoint: iteration <N> — <work unit name> (<completed>/<total> tasks)" \
   || echo "[Pro] checkpoint commit FAILED — $(git status -s | head -3 | tr '\n' ' ')"
 ```
@@ -685,7 +685,7 @@ Writes three evidence-pack files under `<SPEC_DIR>/local-reviews/`:
 - `test-gap-review.md` — acceptance criteria not exercised by tests
 - `security-review.md` — injection / authz / crypto / secrets / unsafe defaults
 
-Each finding must include: file, lines, severity, category, what, evidence quote, why-it-matters, suggested patch, confidence, disproof condition, mapping to AC #. MDASH-inspired: a finding without a file and a line range is dropped. Low false-positive rate is the design goal — see `templates/local/*-review.prompt.md`.
+Each finding must include: file, lines, severity, category, what, evidence quote, why-it-matters, suggested patch, confidence, disproof condition, mapping to AC #. MDASH-inspired: a finding without a file and a line range is dropped. Low false-positive rate is the design goal — see the `local/*-review.prompt.md` prompts in the extension's templates directory (`.specify/extensions/pro/templates/local/` in installed projects).
 
 When `/pro.evaluate` runs next, it loads these drafts alongside the sprint contract. They are leads, not verdicts.
 

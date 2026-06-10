@@ -75,16 +75,69 @@ function Write-ProgressBar {
     Write-Host "  Progress: $bar $Completed/$Total ($pct%)" -ForegroundColor Cyan
 }
 
+# Reads commit.commit_artifacts from pro-config (pure PowerShell section walker —
+# mirrors commit_artifacts_enabled() in pro-orchestrate.sh; no external deps).
+# Returns $true only on an explicit `commit_artifacts: true`; default $false.
+function Test-CommitArtifactsEnabled {
+    $root = git rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $root) { $root = (Get-Location).Path }
+    $candidates = @(
+        (Join-Path $root ".specify/extensions/pro/pro-config.local.yml"),
+        (Join-Path $root ".specify/extensions/pro/pro-config.yml"),
+        (Join-Path $root "pro-config.yml")
+    )
+    foreach ($cfg in $candidates) {
+        if (-not (Test-Path $cfg)) { continue }
+        $inSection = $false
+        foreach ($line in (Get-Content $cfg -ErrorAction SilentlyContinue)) {
+            if ($line -match '^commit:') { $inSection = $true; continue }
+            if ($inSection -and $line -match '^\S') { $inSection = $false }
+            if ($inSection -and $line -match '^\s*commit_artifacts:\s*(.+)$') {
+                $v = ($Matches[1] -replace '#.*$', '').Trim().Trim('"').Trim("'")
+                return ($v -eq 'true')
+            }
+        }
+    }
+    return $false
+}
+
 function New-CheckpointCommit {
     param([string]$Label, [int]$Completed, [int]$Total)
     try {
         $inRepo = git rev-parse --is-inside-work-tree 2>$null
         if ($LASTEXITCODE -ne 0) { Write-ProWarn "Git not available — skipping checkpoint"; return }
 
-        git add . 2>$null
+        # Scoped staging (audit B3 / FR-007): never blanket-stage — workspace state
+        # must stay out of feature-branch commits. .knowledge/features and
+        # .knowledge/metrics are ALWAYS excluded (machine-generated); specs/ is
+        # excluded unless the operator opted in with commit_artifacts: true.
+        # Stage broadly, then DE-STAGE workspace paths: exclude pathspecs naming
+        # gitignored (or partly-ignored) dirs make `git add` exit 1 with the
+        # addIgnoredFile advice; `git reset -- <path>` is a clean no-op when
+        # nothing under the path is staged.
+        $destage = @('specs', '.knowledge/features', '.knowledge/metrics')
+        if (Test-CommitArtifactsEnabled) { $destage = @('.knowledge/features', '.knowledge/metrics') }
+        git add -A -- . 2>$null
+        $addExit = $LASTEXITCODE
+        git reset -q -- @destage 2>$null
+        if ($LASTEXITCODE -ne 0) { git rm -r -q --cached --ignore-unmatch -- @destage 2>$null }
+        $global:LASTEXITCODE = $addExit
+        if ($LASTEXITCODE -ne 0) {
+            $statusLine = @(git status -s 2>$null | Select-Object -First 1) -join ' '
+            Write-ProWarn "Checkpoint staging failed: $statusLine"
+            return
+        }
+
         $diff = git diff --cached --quiet 2>$null
         if ($LASTEXITCODE -ne 0) {
             git commit -m "[Pro] Checkpoint: $Label ($Completed/$Total tasks, feature: $FeatureName)" 2>$null
+            # Verified commit (audit B4): check the exit code — a silent 2>$null
+            # commit failure must never be followed by an unconditional success log.
+            if ($LASTEXITCODE -ne 0) {
+                $statusSnippet = @(git status -s 2>$null | Select-Object -First 3) -join ' '
+                Write-ProError "Checkpoint commit failed: $statusSnippet"
+                return
+            }
             $hash = git rev-parse --short HEAD
             Write-ProSuccess "Checkpoint committed: $Label ($hash)"
 

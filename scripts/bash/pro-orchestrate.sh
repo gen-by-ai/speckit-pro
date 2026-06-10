@@ -224,12 +224,18 @@ checkpoint_commit() {
     # .knowledge/metrics are ALWAYS excluded (machine-generated, per the
     # commit.commit_artifacts config contract); specs/ is excluded unless the
     # operator opted in with commit_artifacts: true.
+    # Stage broadly, then DE-STAGE workspace paths. Exclude pathspecs are a
+    # trap here: naming a gitignored (or partly-ignored, e.g. force-added
+    # seals) dir in ':(exclude)...' makes `git add` exit 1 with the
+    # addIgnoredFile advice on git 2.x. `git reset -- <path>` has no such
+    # edge: it is a no-op when nothing under the path is staged.
     local stage_rc=0
-    if commit_artifacts_enabled; then
-      git add -A -- . ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null || stage_rc=$?
-    else
-      git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null || stage_rc=$?
-    fi
+    local destage="specs .knowledge/features .knowledge/metrics"
+    commit_artifacts_enabled && destage=".knowledge/features .knowledge/metrics"
+    git add -A -- . 2>/dev/null || stage_rc=$?
+    # shellcheck disable=SC2086  # intentional word-split of the path list
+    git reset -q -- $destage 2>/dev/null \
+      || git rm -r -q --cached --ignore-unmatch -- $destage 2>/dev/null || true
     if [[ "$stage_rc" -ne 0 ]]; then
       log_error "checkpoint staging failed: $(git status -s 2>/dev/null | head -1)"
       return 1
@@ -780,7 +786,7 @@ handle_eval_result() {
   # ── Rubric-seal tamper (D9) ── A rubric-mutated/rubric-unsealed verdict means
   # the committed sprint contract seal failed to verify. This is a hard,
   # un-retryable failure: loud operator alarm, return 2 (no revision retry).
-  if printf '%s' "$eval_tag" | grep -qiE 'rubric-mutated|rubric-unsealed'; then
+  if printf '%s' "$eval_tag" | grep -qiE 'rubric-mutated|rubric-unsealed|rubric-weakened'; then
     log_error "════════════════════════════════════════════════════════════"
     log_error "RUBRIC TAMPER — operator review required"
     log_error "Sprint $sprint: the contract seal failed verification ($eval_tag)."

@@ -2,6 +2,22 @@
 
 All notable changes to SpecKit Pro will be documented in this file.
 
+## [1.23.1] — 2026-06-10
+
+Focus: **post-release validation of the v1.23 install.** A 6-lens test workflow (84 checks, findings adversarially verified) exercised the installed extension the way a consumer project runs it; every confirmed finding is fixed and pinned by new smoke checks (suite now 21).
+
+### Fixed
+- **PowerShell checkpoint parity (FR-007/B4).** `pro-orchestrate.ps1` still blanket-staged (`git add .`) and logged success without checking the commit result — the exact classes v1.23 fixed in bash. Ported: scoped staging with exclude pathspecs, `Test-CommitArtifactsEnabled` config walker, `$LASTEXITCODE` verification (behaviorally tested under pwsh 7).
+- **Unshippable schema/contract references.** Shipped surfaces (pro.go.md, pro.scan.md, scan worker/merge prompts, `validate_schemas.py` default) pointed into pro's own gitignored `specs/…` workspace — paths that exist on the dev machine but can never reach a consumer (the release archive contains tracked files only). All schemas now ship under `templates/schemas/` (+ `templates/scan/report-format.md`); references updated; `validate_schemas.py` probes source-repo → consumer-install → legacy locations.
+- **Consumer drift check.** `config_defaults_check.py` default paths only worked in the source repo; flag-less runs in a consumer project now probe `.specify/extensions/pro/` as a fallback.
+- **`FAIL:rubric-weakened` tamper routing.** The orchestrator's tamper branch matched only `rubric-mutated|rubric-unsealed`; weakening-by-amendment now triggers the same operator alarm and no-retry hard fail.
+- **Skill-mirror dangling paths.** Bare `templates/…` tokens in command sources were rewritten by the skill generator to nonexistent `.specify/templates/…` paths; sources now use full `.specify/extensions/pro/templates/…` paths, which the generator preserves.
+- `pro-report.sh` usage header documents `finish --progress-file`.
+- **Scoped staging vs gitignored dirs (found while dogfooding this very release).** Naming a gitignored — or partly-ignored, e.g. holding force-added contract seals — workspace dir in an `:(exclude)` pathspec makes `git add` exit 1 with the addIgnoredFile advice (git 2.x), so the verified-staging check would cry "staging failed" on every checkpoint in a properly-gitignored project. All four staging sites (bash + PowerShell orchestrators, pro-checkpoint.sh, the loop protocol) now **stage broadly and de-stage** workspace paths (`git add -A -- .` then `git reset -q -- specs .knowledge/features .knowledge/metrics`) — `reset` has no ignored-path edge and is a no-op when nothing is staged; in-flight seal edits stay un-staged because `/pro.contract` owns seal commits. Pinned by a runtime smoke check covering all three gitignore states (ignored / not ignored / ignored-with-tracked-seals). Also: `pro-checkpoint.sh` called an undefined `log_error` on the failure path (crash under `set -e`) — defined.
+
+### Changed
+- **`.extensionignore` parity**: installs now ship `scripts/tests/hardening-smoke.sh` (consumer-runnable post-install self-check) and exclude `specs/`, `CLAUDE.md`, `.knowledge/` — so dev installs match the consumer package and dangling references fail loudly during dogfooding instead of silently working only on the dev machine.
+
 ## [1.23] — 2026-06-10
 
 Focus: **autonomy & reliability hardening** — fewer manual interventions, fewer silent failure modes, better self-recovery during long runs. Driven by a 45-finding deep audit of the implementation (three parallel reviews; register in the feature's `audit-findings.md`). Five clusters, each with hermetic smoke coverage in the new `scripts/tests/hardening-smoke.sh` (17 checks).

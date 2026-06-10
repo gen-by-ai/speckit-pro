@@ -2,7 +2,7 @@
 """validate_schemas.py — validate fan-out engine artifacts against their contracts.
 
 Validates Partial Result JSON and telemetry JSONL against the schemas in
-specs/001-parallel-analysis-engine/contracts/. Uses `jsonschema` when installed;
+templates/schemas/ (legacy fallback: the feature-001 workspace). Uses `jsonschema` when installed;
 otherwise falls back to a lightweight structural check (stdlib only) covering the
 required fields and enums — enough to catch the failures that matter for the
 fan-out engine (missing provenance, bad status, malformed telemetry).
@@ -19,9 +19,19 @@ import json
 import os
 import sys
 
-DEFAULT_SCHEMA_DIR = os.path.join(
-    "specs", "001-parallel-analysis-engine", "contracts"
-)
+def _default_schema_dir():
+    """Probe shipped locations: source repo, consumer install, legacy workspace."""
+    for d in (
+        os.path.join("templates", "schemas"),
+        os.path.join(".specify", "extensions", "pro", "templates", "schemas"),
+        os.path.join("specs", "001-parallel-analysis-engine", "contracts"),
+    ):
+        if os.path.isdir(d):
+            return d
+    return os.path.join("templates", "schemas")
+
+
+DEFAULT_SCHEMA_DIR = _default_schema_dir()
 
 PARTIAL_KINDS = {"architecture", "dependency", "risk", "hotspot"}
 PARTIAL_STATUS = {"complete", "summarized", "failed", "truncated"}

@@ -232,12 +232,53 @@ check_checkpoint_patterns() { # row 3.5 (static assertions, widened post-eval)
   # No blanket staging anywhere in the shipped scripts or the loop protocol.
   ! grep -rqE 'git add \. *(2>/dev/null)?( *\|\| *true)?$' "$ROOT/scripts/bash" || return 1
   ! grep -qE '^git add \.$' "$ROOT/commands/pro.go.md" || return 1
+  # Scoped staging v1.23.1 form: stage broadly, then de-stage workspace paths
+  # (exclude pathspecs naming gitignored/partly-ignored dirs make git add exit 1).
   local F
   for F in "$ROOT/scripts/bash/pro-orchestrate.sh" "$ROOT/scripts/bash/pro-checkpoint.sh"; do
-    grep -q ":(exclude)specs" "$F" || return 1
-    grep -q ":(exclude).knowledge/features" "$F" || return 1
-    grep -q ":(exclude).knowledge/metrics" "$F" || return 1
+    grep -q "git add -A -- \." "$F" || return 1
+    grep -qE "git reset -q( HEAD)? -- " "$F" || return 1
+    grep -q ".knowledge/metrics" "$F" || return 1
+    ! grep -qE "git add[^#]*:\(exclude\)" "$F" || return 1   # no ACTIVE exclude-pathspec staging
   done
+}
+
+check_scoped_staging_runtime() { # v1.23.1: add-then-destage works in ALL gitignore states
+  local D="$TMP_BASE/stage" out
+  stage_dance() { # the exact shipped pattern (pro-orchestrate.sh / pro-checkpoint.sh)
+    git add -A -- . 2>/dev/null || return 1
+    git reset -q -- specs .knowledge/features .knowledge/metrics 2>/dev/null \
+      || git rm -r -q --cached --ignore-unmatch -- specs .knowledge/features .knowledge/metrics 2>/dev/null || true
+    return 0
+  }
+  # State A: workspace dirs gitignored (the Phase-5b consumer norm)
+  rm -rf "$D"; mkdir -p "$D/src" "$D/specs" "$D/.knowledge/features"
+  ( cd "$D" && git init -q . && echo x > src/a.txt && echo y > specs/s.md \
+      && printf 'specs/\n.knowledge/features/\n.knowledge/metrics/\n' > .gitignore )
+  ( cd "$D" && stage_dance ) || return 1
+  out="$(cd "$D" && git diff --cached --name-only)"
+  printf '%s\n' "$out" | grep -q 'src/a.txt' || return 1
+  ! printf '%s\n' "$out" | grep -q 'specs/' || return 1
+  # State B: nothing gitignored — the de-stage must carry the scoping alone
+  rm -rf "$D"; mkdir -p "$D/src" "$D/specs" "$D/.knowledge/features"
+  ( cd "$D" && git init -q . && echo x > src/a.txt && echo y > specs/s.md && echo z > .knowledge/features/f.md )
+  ( cd "$D" && stage_dance ) || return 1
+  out="$(cd "$D" && git diff --cached --name-only)"
+  printf '%s\n' "$out" | grep -q 'src/a.txt' || return 1
+  ! printf '%s\n' "$out" | grep -qE 'specs/|\.knowledge/' || return 1
+  # State C: gitignored dir CONTAINING force-added tracked files (the seal case)
+  rm -rf "$D"; mkdir -p "$D/src" "$D/.knowledge/features/f/contracts"
+  ( cd "$D" && git init -q . \
+      && printf 'specs/\n.knowledge/features/\n.knowledge/metrics/\n' > .gitignore \
+      && echo seal1 > .knowledge/features/f/contracts/sprint-1.sha256 \
+      && git add -f .knowledge/features/f/contracts/sprint-1.sha256 \
+      && git commit -qm seed \
+      && echo x > src/a.txt \
+      && echo seal2 > .knowledge/features/f/contracts/sprint-1.sha256 )   # tracked file modified
+  ( cd "$D" && stage_dance ) || return 1
+  out="$(cd "$D" && git diff --cached --name-only)"
+  printf '%s\n' "$out" | grep -q 'src/a.txt' || return 1
+  ! printf '%s\n' "$out" | grep -q '.knowledge/' || return 1   # seal change de-staged (contract cmd owns seal commits)
 }
 
 # ── Sprint 4 — US3 state integrity (contract rows 4.0–4.2) ──────────────────
@@ -364,6 +405,44 @@ FIX
   grep -q 'No uncertainties raised' "$D/specs/009-unc/uncertainties.md"
 }
 
+# ── v1.23.1 — post-release hardening (test-installed-v123 workflow findings) ─
+
+check_ps1_checkpoint_patterns() { # F-001: PowerShell parity for scoped+verified checkpoints
+  local F="$ROOT/scripts/powershell/pro-orchestrate.ps1"
+  [[ -f "$F" ]] || return 1
+  ! grep -qE 'git add \. ' "$F" || return 1
+  grep -q "git add -A -- \." "$F" || return 1
+  grep -q "git reset -q -- " "$F" || return 1
+  grep -q 'LASTEXITCODE' "$F" || return 1
+}
+
+check_tamper_grep_weakened() { # F2: rubric-weakened routes to the tamper branch
+  grep -q "rubric-mutated|rubric-unsealed|rubric-weakened" "$ROOT/scripts/bash/pro-orchestrate.sh"
+}
+
+check_no_unshippable_refs() { # PKG-001/F1: shipped surfaces never reference pro's gitignored workspace
+  # Sweep everything that ships (commands + templates + scripts) for pro's own feature dirs.
+  ! grep -rnE "specs/(001-parallel-analysis-engine|002-self-improving-orchestration|003-autonomy-reliability-hardening)" \
+      "$ROOT/commands/" "$ROOT/templates/" "$ROOT/scripts/" --include='*.md' --include='*.sh' --include='*.py' \
+      >/dev/null 2>&1 || return 1
+  local f
+  for f in worker-result partial-result telemetry-event; do
+    [[ -f "$ROOT/templates/schemas/$f.schema.json" ]] || return 1
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$ROOT/templates/schemas/$f.schema.json" || return 1
+  done
+}
+
+check_drift_consumer_fallback() { # CDC-001: flag-less run works in a consumer-shaped project
+  local D="$TMP_BASE/consumer"
+  rm -rf "$D"; mkdir -p "$D/.specify/extensions/pro"
+  ( cd "$D" && git init -q . )
+  cp "$ROOT/extension.yml" "$ROOT/pro-config.template.yml" "$D/.specify/extensions/pro/"
+  local out
+  out="$(cd "$D" && python3 "$ROOT/scripts/local/config_defaults_check.py" --strict 2>&1)" || return 1
+  printf '%s\n' "$out" | grep -q '^drift: 0 mismatch' || return 1
+  ! printf '%s\n' "$out" | grep -q 'PARSE-FAILURE'
+}
+
 # ── Harness self-test (contract row 1.4) ─────────────────────────────────────
 check_failing_fixture() { return 1; }   # only registered under --selftest
 
@@ -394,6 +473,11 @@ result fanout-concurrent     "$(check_fanout_concurrent   >/dev/null 2>&1; echo 
 result drift-checker         "$(check_drift_checker       >/dev/null 2>&1; echo $?)"
 result unattended-defaults   "$(check_unattended_defaults >/dev/null 2>&1; echo $?)"
 result uncertainty-digest    "$(check_uncertainty_digest  >/dev/null 2>&1; echo $?)"
+result ps1-checkpoint        "$(check_ps1_checkpoint_patterns >/dev/null 2>&1; echo $?)"
+result scoped-staging-runtime "$(check_scoped_staging_runtime >/dev/null 2>&1; echo $?)"
+result tamper-grep-weakened  "$(check_tamper_grep_weakened    >/dev/null 2>&1; echo $?)"
+result no-unshippable-refs   "$(check_no_unshippable_refs     >/dev/null 2>&1; echo $?)"
+result drift-consumer        "$(check_drift_consumer_fallback >/dev/null 2>&1; echo $?)"
 if [[ "$SELFTEST" -eq 1 ]]; then
   result selftest-fixture    "$(check_failing_fixture     >/dev/null 2>&1; echo $?)"
 else

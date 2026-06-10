@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkerResultEnvelope",
+  "description": "Structured return value of one parallel implement sub-agent ([P] task worker). A task is marked [x] iff status == pass; an unparseable result is treated as status: fail.",
+  "type": "object",
+  "required": ["task_id", "status", "files"],
+  "properties": {
+    "task_id": { "type": "string", "pattern": "^T[0-9]{3,}$" },
+    "status": { "enum": ["pass", "fail", "timeout"] },
+    "files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "files written/modified; must stay within the task's declared file set"
+    },
+    "tests_run": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "uncertainties": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "notes": { "type": "string", "maxLength": 400 }
+  },
+  "additionalProperties": false
+}

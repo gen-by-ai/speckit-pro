@@ -52,7 +52,7 @@ For each portion in `portions.json`, dispatch a **sub-agent** (agent type
 - the worker prompt `templates/scan/worker.prompt.md`,
 - its `PORTION_ID` and `FILES` list.
 Each worker writes its Partial Result JSON to `$WORK/results/<portion_id>.json`
-(schema: `specs/001-parallel-analysis-engine/contracts/partial-result.schema.json`).
+(schema ships at `.specify/extensions/pro/templates/schemas/partial-result.schema.json`; in the pro source repo: `templates/schemas/`).
 
 Record a telemetry line per worker (dispatch/complete/fail/timeout) to
 `parallel.metrics_file` — reuse `scripts/bash/lib/pro-fanout-common.sh::fanout_telemetry`

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FanoutTelemetryEvent",
+  "description": "One JSONL line per worker event, appended under .knowledge/metrics/ (gitignored). Aggregated by /pro.local-metrics. Mirrors the local_models telemetry convention.",
+  "type": "object",
+  "required": ["ts", "run_id", "event", "substrate"],
+  "additionalProperties": false,
+  "properties": {
+    "ts": { "type": "string", "description": "ISO-8601, stamped by the engine" },
+    "run_id": { "type": "string" },
+    "portion_id": { "type": "string" },
+    "event": { "enum": ["dispatch", "complete", "fail", "timeout", "tiebreak"] },
+    "substrate": { "enum": ["in-harness", "cli", "sequential"] },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "tokens": { "type": "integer", "minimum": 0 },
+    "error": { "type": "string" }
+  }
+}

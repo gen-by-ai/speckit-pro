@@ -229,7 +229,7 @@ For each contract row in scope (the contract's Acceptance Criteria table is the 
 
 ### Browser-test script requirements
 
-For each CRITICAL row in the sprint contract, write `<spec-dir>/browser-tests/<flow>/<NN>-<state>.sh`. Reference `templates/browser-test-template.sh` (copied into the spec dir as `_template.sh` by `/speckit.pro.contract`) for the canonical shape.
+For each CRITICAL row in the sprint contract, write `<spec-dir>/browser-tests/<flow>/<NN>-<state>.sh`. Reference the canonical template `.specify/extensions/pro/templates/browser-test-template.sh` (copied into the spec dir as `_template.sh` by `/speckit.pro.contract`) for the canonical shape.
 
 Hard rules:
 - **Hermetic setup** — every script clears `localStorage`, `sessionStorage`, cookies before asserting. No script may depend on the order in which siblings ran.

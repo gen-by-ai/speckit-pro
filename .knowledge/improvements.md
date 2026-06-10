@@ -64,6 +64,11 @@ anomalies needs no new entry — a stale learning is worse than none.
 
 <!-- Phase 8 appends here. NOT applied at Phase 0 until a human promotes into ## Promoted. Newest first. -->
 
+- [2026-06-10] (v1.23.1 post-release validation) status: proposed **Make the dev/test environment byte-identical to the consumer environment — divergence masks whole defect classes.**
+  Why: the dev install shipped gitignored specs/ into the extension, so unshippable schema references "worked" locally (4 surfaces pointed at paths consumers can never have); separately, scratch-repo tests without .gitignore missed that exclude pathspecs naming gitignored dirs make `git add` exit 1 — every checkpoint would have failed in real consumer projects.
+  Apply: keep .extensionignore aligned with what `git archive` ships (dev installs = consumer package); when testing git/FS behavior, replicate the consumer's ignore/config state in fixtures; smoke-test from the INSTALLED copy, not the source tree.
+  Evidence: test-installed-v123 workflow (84 checks) → PKG-001/002/003 + the addIgnoredFile exit-1 repro; fixes in v1.23.1.  Promoted-by: —  Disproven-by: —
+
 - [2026-06-10] (003-autonomy-reliability-hardening, eval PASS 87) status: proposed **Hunt default-branch fallbacks that return success — the worst silent failure is a catch-all that treats unknown states as OK.**
   Why: the orchestrator's evaluator-verdict fallback was `*) … treating as PASS; return 0` — a malformed/ERROR verdict shipped unverified code; three audits described it as a mere "implicit non-pass" until the code was read.
   Apply: when auditing failure handling, grep every `case` catch-all and `except`/`|| true` default for a success return; classify unknown states as explicit failures with a recorded reason.

@@ -22,7 +22,7 @@ Every claim MUST carry **provenance**: at least one `path:line` (or `path` if li
 
 ## Output — STRICT
 Emit **only** a single JSON object conforming to
-`specs/001-parallel-analysis-engine/contracts/partial-result.schema.json`:
+`.specify/extensions/pro/templates/schemas/partial-result.schema.json` (source repo: `templates/schemas/partial-result.schema.json`):
 
 ```json
 {

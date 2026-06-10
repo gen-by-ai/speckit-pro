@@ -177,8 +177,24 @@ def main():
     args = ap.parse_args()
 
     root = repo_root()
-    ext_path = args.extension or os.path.join(root, "extension.yml")
-    tpl_path = args.template or os.path.join(root, "pro-config.template.yml")
+
+    def first_existing(candidates):
+        """First existing path, else the first candidate (its parse failure names it)."""
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        return candidates[0]
+
+    # Default paths probe both layouts: the pro SOURCE repo (files at the root)
+    # and a CONSUMER project (files under .specify/extensions/pro/).
+    ext_path = args.extension or first_existing([
+        os.path.join(root, "extension.yml"),
+        os.path.join(root, ".specify", "extensions", "pro", "extension.yml"),
+    ])
+    tpl_path = args.template or first_existing([
+        os.path.join(root, "pro-config.template.yml"),
+        os.path.join(root, ".specify", "extensions", "pro", "pro-config.template.yml"),
+    ])
 
     parse_failed = False
     ext, tpl = None, None

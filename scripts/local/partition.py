@@ -9,7 +9,8 @@ DETERMINISTIC: the same tree + args yields byte-identical portions.json
 (stable sorts by path), which is what makes scan reproducibility (SC-006)
 checkable.
 
-Stdlib only. See specs/001-parallel-analysis-engine/contracts/cli-schema.md
+Stdlib only. CLI contract documented in the pro source repo (feature 001 workspace,
+cli-schema.md); output validates against templates/schemas/partial-result.schema.json
 and data-model.md (Portion). Part of the SpecKit Pro fan-out engine.
 """
 import argparse

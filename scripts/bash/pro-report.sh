@@ -25,9 +25,11 @@
 #               Append one entry to the per-run manifest's calls[] array. Flags NOT
 #               passed are stored as JSON null (never 0). Self-no-ops if manifest absent.
 #   finish    [--feature <slug>] [--run-id <id>] [--eval-verdict V] [--eval-score N]
-#             [--iterations N] [--max-iterations N] [--parallel <on|off>] [--no-stdout]
+#             [--iterations N] [--max-iterations N] [--parallel <on|off>]
+#             [--progress-file <path>] [--no-stdout]
 #               Compute the delta, roll up phases[]/calls[] into cost/token/per-phase
 #               telemetry, write specs/<feature>/run-report.md, append to runs.jsonl.
+#               --progress-file extracts <pro-uncertainty> blocks → uncertainties.md.
 #               When reporting.otel.enabled resolves true, hands the manifest to
 #               pro-otel-emit.sh (failures warn-only, never abort).
 #   aggregate [--last N] [--json]

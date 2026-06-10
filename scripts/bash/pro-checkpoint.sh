@@ -35,6 +35,7 @@ done
 log_info()    { echo -e "[Pro] $*"; }
 log_success() { echo -e "${GREEN}[Pro] ✓${RESET} $*"; }
 log_warn()    { echo -e "${YELLOW}[Pro] ⚠${RESET} $*"; }
+log_error()   { echo -e "${YELLOW}[Pro] ✗${RESET} $*"; }
 
 # ─── Count tasks ─────────────────────────────────────────────────────────────
 count_tasks() {
@@ -86,10 +87,15 @@ main() {
   local commit_hash="N/A"
   if git rev-parse --is-inside-work-tree &>/dev/null; then
     # Scoped staging (FR-007): never blanket-stage — workspace state (specs/,
-    # .knowledge/features|metrics) stays out of checkpoint commits.
-    if ! git add -A -- . ':(exclude)specs' ':(exclude).knowledge/features' ':(exclude).knowledge/metrics' 2>/dev/null; then
+    # .knowledge/features|metrics) stays out of checkpoint commits. Stage
+    # broadly then DE-STAGE: exclude pathspecs naming gitignored/partly-ignored
+    # dirs make `git add` exit 1 (addIgnoredFile advice); `git reset -- <path>`
+    # is a clean no-op when nothing under the path is staged.
+    if ! git add -A -- . 2>/dev/null; then
       log_warn "Staging failed: $(git status -s 2>/dev/null | head -1)"
     fi
+    git reset -q -- specs .knowledge/features .knowledge/metrics 2>/dev/null \
+      || git rm -r -q --cached --ignore-unmatch -- specs .knowledge/features .knowledge/metrics 2>/dev/null || true
     if ! git diff --cached --quiet 2>/dev/null; then
       local commit_msg="[Pro] Checkpoint: $LABEL ($completed/$total tasks)"
       [[ -n "$FEATURE_NAME" ]] && commit_msg="$commit_msg [feature: $FEATURE_NAME]"

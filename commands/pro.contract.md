@@ -121,7 +121,7 @@ If a flow's matrix genuinely has fewer than three relevant edge cases, document 
 
 ### How to Verify — runbook per row
 
-For every row, the Browser Test path must point to a script that exists by end-of-sprint and that the evaluator can run with one command. The script's PASS/FAIL output is the definitive verdict — the evaluator does not re-judge the behavior in prose. See `templates/browser-test-template.sh` for the canonical shape.
+For every row, the Browser Test path must point to a script that exists by end-of-sprint and that the evaluator can run with one command. The script's PASS/FAIL output is the definitive verdict — the evaluator does not re-judge the behavior in prose. See the canonical template `.specify/extensions/pro/templates/browser-test-template.sh` for the shape.
 
 For each CRITICAL row, the "Expected Behavior" cell must read as a single fact that the script can grep for or that agent-browser can assert. Vague phrasing here means an unfalsifiable test.
 
@@ -188,7 +188,7 @@ while IFS= read -r flow; do
 done < <(awk -F'|' '/browser-tests\//{match($0, /browser-tests\/[^/]+/); print substr($0, RSTART+15, RLENGTH-15)}' "${CONTRACT_FILE}" | sort -u)
 ```
 
-If the parent project does not yet have `templates/browser-test-template.sh` (because the extension was added before v1.12.0), copy the canonical template into the spec dir for reference:
+If the parent project does not yet have the browser-test template under `.specify/extensions/pro/templates/` (because the extension was added before v1.12.0), copy the canonical template into the spec dir for reference:
 
 ```bash
 PROJECT_ROOT=$(git rev-parse --show-toplevel)

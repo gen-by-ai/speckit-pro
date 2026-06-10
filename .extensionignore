@@ -8,10 +8,18 @@
 .agents/
 .specify/
 
-# Test files
-tests/
+# Test files (the smoke suite scripts/tests/hardening-smoke.sh SHIPS — it is a
+# consumer-runnable post-install self-check referenced by .knowledge/INDEX.md)
 *.test.sh
 *.test.ps1
+
+# Workspace state — gitignored in the source repo; excluding it here keeps
+# dev installs (--dev .) identical to the consumer GitHub-archive package, so
+# a doc reference into these paths fails loudly during dogfooding instead of
+# silently working only on the dev machine.
+specs/
+CLAUDE.md
+.knowledge/
 
 # Documentation source (README.md is kept)
 CONTRIBUTING.md

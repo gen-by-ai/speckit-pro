@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PartialResult",
+  "description": "One worker's analysis of one portion. Written to .work/<run-id>/results/<portion_id>.json",
+  "type": "object",
+  "required": ["portion_id", "status", "findings", "unknowns"],
+  "additionalProperties": false,
+  "properties": {
+    "portion_id": { "type": "string", "pattern": "^p[0-9]+(-[0-9]+)*$" },
+    "status": { "enum": ["complete", "summarized", "failed", "truncated"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "target", "claim", "evidence", "confidence"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["architecture", "dependency", "risk", "hotspot"] },
+          "target": { "type": "string", "description": "file / module / symbol the claim is about" },
+          "claim": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "description": "provenance, e.g. src/auth/login.ts:42 (FR-016)" }
+          },
+          "confidence": { "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "unknowns": { "type": "array", "items": { "type": "string" } },
+    "error": { "type": "string", "description": "required when status is failed or truncated" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["failed", "truncated"] } } },
+      "then": { "required": ["error"] }
+    }
+  ]
+}

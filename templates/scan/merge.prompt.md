@@ -2,7 +2,7 @@
 
 You are the **merge stage** of SpecKit Pro's fan-out engine. You receive every
 worker's Partial Result (JSON conforming to
-`specs/001-parallel-analysis-engine/contracts/partial-result.schema.json`) plus the
+`.specify/extensions/pro/templates/schemas/partial-result.schema.json`) plus the
 **Coverage Ledger** (one row per portion with its status). You produce the single
 merged report.
 
@@ -20,7 +20,7 @@ merged report.
     "verdict": null, "dissent": null, "tiebreaker_run": false}
    ```
    The engine will run the tie-breaker (see `tiebreak.prompt.md`) for each conflict and fill `verdict` + `dissent` before final render. Never silently resolve a conflict here.
-4. **Render** the report exactly per `specs/001-parallel-analysis-engine/contracts/report-format.md`:
+4. **Render** the report exactly per the shipped format contract `.specify/extensions/pro/templates/scan/report-format.md` (source repo: `templates/scan/report-format.md`):
    - Header (run_id, substrate, workers, wall-clock, serial baseline, speedup)
    - `## Architecture Map` · `## Module / Dependency Overview` · `## Risk Hotspots`
      (sort risks by severity; carry provenance)
