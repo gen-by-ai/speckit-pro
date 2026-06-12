@@ -11,7 +11,16 @@
 # =============================================================================
 set -uo pipefail
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Hermeticity: leaked SPECKIT_PRO_* env overrides would skew sandboxed runs.
+while IFS='=' read -r _v _; do
+  case "$_v" in SPECKIT_PRO_*) unset "$_v" ;; esac
+done < <(env)
+
+# Resolve the repo root relative to THIS file, not the git toplevel — in an
+# installed consumer repo the toplevel is the consumer root, and the suite
+# ships as a consumer-runnable post-install self-check.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REPORT="$ROOT/scripts/bash/pro-report.sh"
 PASS_N=0; FAIL_N=0; FAILED=""
 

@@ -24,6 +24,7 @@ CLAUDE.md
 # Documentation source (README.md is kept)
 CONTRIBUTING.md
 docs/
+IMPROVEMENTS.md
 
 # Build artifacts
 __pycache__/

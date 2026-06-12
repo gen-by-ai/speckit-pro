@@ -64,6 +64,11 @@ anomalies needs no new entry — a stale learning is worse than none.
 
 <!-- Phase 8 appends here. NOT applied at Phase 0 until a human promotes into ## Promoted. Newest first. -->
 
+- [2026-06-11] (v1.24 survive-the-night) status: proposed **Under `set -euo pipefail`, every `var=$(… | grep …)` is a death trap on the no-match path — guard each one with `|| var=""`.**
+  Why: two latent production bugs had the same shape: the status-tag scrape pipeline killed the orchestrator on any tag-less agent answer (making the `ERROR:no-status-tag` branch unreachable dead code), and a bare `handle_eval_result; rc=$?` died the moment the evaluator returned NEEDS_REVISION. Both were unreachable in happy-path manual testing; the fake-agent state-machine suite hit them on its first run.
+  Apply: grep orchestration scripts for `$(`…`grep`/unguarded function-calls-followed-by-`$?` under set -e; pin each terminal path with a hermetic fake-CLI test (scripts/tests/orchestrator-smoke.sh pattern) — error paths only execute at 3am, so only tests ever exercise them.
+  Evidence: pro-orchestrate.sh parse_agent_result (pre-v1.24 rungs 1+2) + evaluator cycle; caught by orchestrator-smoke.sh checks unknown-counts-toward-breaker / statusfile-contract / eval-malformed-score-revision.  Promoted-by: —  Disproven-by: —
+
 - [2026-06-10] (v1.23.1 post-release validation) status: proposed **Make the dev/test environment byte-identical to the consumer environment — divergence masks whole defect classes.**
   Why: the dev install shipped gitignored specs/ into the extension, so unshippable schema references "worked" locally (4 surfaces pointed at paths consumers can never have); separately, scratch-repo tests without .gitignore missed that exclude pathspecs naming gitignored dirs make `git add` exit 1 — every checkpoint would have failed in real consumer projects.
   Apply: keep .extensionignore aligned with what `git archive` ships (dev installs = consumer package); when testing git/FS behavior, replicate the consumer's ignore/config state in fixtures; smoke-test from the INSTALLED copy, not the source tree.

@@ -31,6 +31,7 @@ Parse the following from `$ARGUMENTS` (space-separated key=value pairs):
 | `max` | yes | Maximum iterations allowed |
 | `checkpoint-freq` | no | Commit every N iterations (default: 3) |
 | `knowledge-feature-dir` | no | Absolute path to `.knowledge/features/<feature>` dir (default: derived from git root) |
+| `blocked-log` | no | Path to the deferred-blocker journal. When present, READ IT FIRST: those work units hit a wall in earlier iterations — pick a different, independent incomplete work unit instead of re-attempting them. Only re-attempt a journaled blocker when no other incomplete work unit remains (then state why in your output). |
 
 **Deriving `<knowledge-feature-dir>`** (when not passed explicitly):
 ```bash
@@ -460,6 +461,18 @@ Output **exactly one** of these terminal tags as the last line of output:
 | `<pro-status>MAX_ITERATIONS</pro-status>` | Safety limit reached — terminate loop |
 
 > **Headless JSON path — the tag must be the final line of the textual answer.** When this loop runs unattended via `pro-orchestrate.sh` with `--output-format json`, the orchestrator does **not** read your raw stdout — it parses the CLI's JSON result object and scrapes the `<pro-status>` tag out of the `.result` string field (the assistant's textual answer), defensively (python3, then a text scrape; no jq). So the tag must still be emitted as plain text in your answer **and still be the last line of that answer** — exactly as in the in-harness path. Do not move it into a tool call, a code fence the model might drop, or a trailing summary after it; if it is not the final line of `.result`, the orchestrator cannot derive a control signal and treats the iteration as `ERROR:*` (which counts toward the circuit breaker). One tag, last line, every time — text path and JSON path alike.
+
+### Status-file contract (write it in addition to the tag)
+
+Before emitting the terminal tag, ALSO write your status to `<spec-dir>/.pro-status.json`:
+
+```json
+{"status": "CONTINUE", "reason": ""}
+```
+
+- `status` ∈ `COMPLETE` | `CONTINUE` | `BLOCKED` | `ERROR` | `MAX_ITERATIONS` (same vocabulary as the tag; put the BLOCKED/ERROR detail in `reason`, not in `status`).
+- One JSON object, nothing else in the file. Overwrite whatever is there.
+- This is the **preferred control channel**: the orchestrator reads and deletes it each iteration, and it survives everything that breaks stdout scraping (CLI cost-footers, an early mention of the protocol in your answer, a dropped final line). The stdout tag remains REQUIRED — it is the fallback channel and the only channel for older orchestrators.
 
 ## Context Efficiency Guidelines
 

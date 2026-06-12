@@ -82,6 +82,7 @@ Review at the **spec** and **plan** gates; the rest auto-continues by default.
 | `/speckit.pro.local-prep` | Prep artifacts (auto when Ollama up) |
 | `/speckit.pro.local-review` | First-pass review (auto when Ollama up) |
 | `/speckit.pro.local-metrics` | Local-model **and** fan-out worker metrics |
+| `/speckit.pro.analytics` | Cross-run analytics: rollups, failure taxonomy, cost, health grade; `export`/`import` shareable insights bundles across repos |
 | `/speckit.pro.compress` | Write `handoff.md` for next sprint |
 | `/speckit.pro.checkpoint` | Commit + snapshot now |
 
@@ -100,7 +101,9 @@ Per-command detail lives in [`commands/`](commands/) (e.g. `pro.go.md`, `pro.loo
 
 Each loop iteration: load contract + `handoff.md` → implement one work unit → checkpoint. The **evaluator** is a fresh agent; it must not grade its own work. On **PASS**, optional knowledge sync proposes updates to shared `.knowledge/`.
 
-**Stop conditions:** all tasks done, max iterations, or circuit breaker after consecutive failures. Resume with `/speckit.pro.resume`.
+**Stop conditions:** all tasks done, max iterations (relative to this run — resume always gets a full budget), circuit breaker after 3 consecutive failures (errors, BLOCKED, *or* unparseable statuses), the no-progress watchdog (no new `[x]` for N iterations), a per-call timeout, or a wall-clock/USD budget. Every stop writes `loop-state.json`, notifies (webhook optional, `notifications.jsonl` always), and is resumable with `/speckit.pro.resume`.
+
+**Unattended-run hardening (v1.24):** per-call timeouts, a single-orchestrator lockfile, per-iteration transcripts under `.knowledge/features/<feature>/logs/`, a file-based status contract (`<spec-dir>/.pro-status.json`) that survives stdout-scrape failures, a deferred-blocker journal the next iteration reads, and `pro-orchestrate.sh --doctor` — run it before an overnight run to answer "will this even start?" without burning a token.
 
 **Parallel analysis:** `/speckit.pro.scan` runs a **fan-out engine** standalone — it splits the repo into dependency-clustered portions, analyzes them across concurrent workers (in-harness sub-agents, or headless agent-CLI processes from a terminal), and merges into one report under `.knowledge/scan/`. Set `parallel.phases.analyze: true` to fan out the analyze phase the same way.
 
@@ -115,7 +118,10 @@ Edit `.specify/extensions/pro/pro-config.yml` (from `pro-config.template.yml`):
 - **`parallel.enabled`** — parallel deep-analysis / `/pro.scan` (default `true`; self-degrades to sequential). `parallel.phases.analyze` opts the analyze phase into a fan-out pre-pass.
 - **`commit.commit_artifacts`** — `false` keeps `specs/` out of PR commits
 
-Env overrides: `SPECKIT_PRO_MODEL`, `SPECKIT_PRO_MAX_ITERATIONS`, `SPECKIT_PRO_AGENT_CLI`.
+- **`loop.iteration_timeout` / `loop.no_progress_limit` / `loop.max_wall_seconds`** — survive-the-night knobs
+- **`notify.webhook_url`** + `notify.on_failure` / `notify.on_complete` — Slack-compatible webhook on breaker trips, watchdog stops, eval fails, completions
+
+Env overrides (flag > env > config): `SPECKIT_PRO_MODEL`, `SPECKIT_PRO_MAX_ITERATIONS`, `SPECKIT_PRO_AGENT_CLI`, `SPECKIT_PRO_ITERATION_TIMEOUT`, `SPECKIT_PRO_NO_PROGRESS_LIMIT`, `SPECKIT_PRO_MAX_WALL_SECONDS`, `SPECKIT_PRO_WEBHOOK_URL`, `SPECKIT_PRO_NOTIFY_ON_FAILURE`, `SPECKIT_PRO_NOTIFY_ON_COMPLETE`. Verify the resolved result with `pro-orchestrate.sh --doctor`.
 
 ## `.knowledge/` (one tree)
 

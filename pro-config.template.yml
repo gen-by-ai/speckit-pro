@@ -72,6 +72,24 @@ loop:
   # or one task group (false — more granular but more iterations)
   implement_phases: true
 
+  # ── Survive-the-night knobs (v1.24, headless pro-orchestrate.sh) ────────────
+  # Per-call timeout for every generator/evaluator/revision invocation. A hung
+  # CLI (network stall, interactive prompt) becomes ERROR:iteration-timeout and
+  # counts toward the circuit breaker instead of freezing the run. 0 disables.
+  # Flag: --iteration-timeout · Env: SPECKIT_PRO_ITERATION_TIMEOUT
+  iteration_timeout: 1800
+
+  # Whole-run wall-clock budget in seconds; empty/0 = unlimited. On expiry the
+  # run stops CLEANLY (checkpoint + loop-state + notification), exit 0.
+  # Flag: --max-wall-seconds · Env: SPECKIT_PRO_MAX_WALL_SECONDS
+  max_wall_seconds: 0
+
+  # No-progress watchdog: consecutive CONTINUE/unknown iterations without a new
+  # [x] in tasks.md before the run stops for operator review. The checkbox
+  # delta is the one progress signal the agent can't get wrong by accident.
+  # 0 disables. Flag: --no-progress-limit · Env: SPECKIT_PRO_NO_PROGRESS_LIMIT
+  no_progress_limit: 3
+
 # ── Generator / Evaluator Split ──────────────────────────────────────────────
 # Inspired by: https://www.anthropic.com/engineering/harness-design-long-running-apps
 #
@@ -627,9 +645,17 @@ reporting:
   # Print `pro-report.sh aggregate` (trend dashboard + recommendations) at Phase 8.
   aggregate_on_finish: true
 
-# ── Notification Settings ─────────────────────────────────────────────────────
-# (Future: webhook/notification integration)
+# ── Notification Settings (wired in v1.24) ───────────────────────────────────
+# pro-orchestrate.sh ALWAYS appends every notable event (circuit_breaker,
+# watchdog_no_progress, eval_hard_fail, budget_stop, wall_clock_stop,
+# terminated, max_iterations, run_complete) to
+# .knowledge/metrics/notifications.jsonl — the 3am audit trail, webhook or not.
+# When webhook_url is set AND the matching gate below is on, the event is also
+# POSTed as JSON with a Slack-compatible "text" field (curl, 5s timeout,
+# best-effort — never aborts the run).
+# Env overrides: SPECKIT_PRO_WEBHOOK_URL, SPECKIT_PRO_NOTIFY_ON_FAILURE,
+# SPECKIT_PRO_NOTIFY_ON_COMPLETE. Flag: --webhook-url.
 notify:
-  on_complete: false
-  on_failure: false
-  # webhook_url: "${SPECKIT_PRO_WEBHOOK_URL}"
+  on_complete: false   # gates info events (run_complete)
+  on_failure: false    # gates error/warning events (everything else)
+  webhook_url: ""      # e.g. https://hooks.slack.com/services/T000/B000/XXXX

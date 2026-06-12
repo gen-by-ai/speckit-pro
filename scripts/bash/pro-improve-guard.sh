@@ -72,7 +72,20 @@ KNOWN_GOOD_DIR="$PROBES_DIR/known-good"
 KNOWN_BAD_DIR="$PROBES_DIR/known-bad"
 PROBE_RESULTS_DIR="$PROJECT_ROOT/.knowledge/metrics/probes"
 DRIFT_FILE="$PROJECT_ROOT/.knowledge/metrics/probe-drift.json"
+# Evaluator agent definition — same cascade as pro-orchestrate.sh
+# resolve_agent_file (the old `.github/agents/` path ships nowhere; the guard
+# would have FAIL-CLOSED on every machine). First readable candidate wins;
+# a miss keeps the last candidate so the existing fail-closed check still names
+# a concrete path.
+_guard_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EVAL_AGENT="$PROJECT_ROOT/.github/agents/speckit.pro.evaluate.agent.md"
+for _cand in "${SPECKIT_PRO_AGENTS_DIR:-}/speckit.pro.evaluate.agent.md" \
+             "$_guard_script_dir/../../agents/speckit.pro.evaluate.agent.md" \
+             "$PROJECT_ROOT/.specify/extensions/pro/agents/speckit.pro.evaluate.agent.md" \
+             "$PROJECT_ROOT/agents/speckit.pro.evaluate.agent.md" \
+             "$PROJECT_ROOT/.github/agents/speckit.pro.evaluate.agent.md"; do
+  if [[ -r "$_cand" ]]; then EVAL_AGENT="$_cand"; break; fi
+done
 
 have_py() { command -v python3 >/dev/null 2>&1; }
 

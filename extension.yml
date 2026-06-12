@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "pro"
   name: "SpecKit Pro"
-  version: "1.23.2"
+  version: "1.24"
   description: "Autonomous long-run orchestration layered on native SpecKit commands — hooks, generator/evaluator loop, sprint contracts with edge-case matrix + browser-test rows, replayable agent-browser test scripts with regression carry-forward, stub/no-op auto-fail gate, branch-symmetry enforcement, post-implement drift reconciliation, repo-level knowledge-base prime/sync, adversarial spec deepener with capability-based source discovery + edge-case depth checklist, context resets, AGENT.md self-update, rich progress tracking, overlap-aware pre-flight, PR-safe checkpoints, pickup-existing-feature workflow, local Ollama sidecar (prep/materialize/first-pass review) with evidence-pack discipline so Claude becomes a premium worker not the whole factory; self-improving headless orchestration — sealed sprint contracts, generator/evaluator model independence, proposal-based improvements ledger with curation, probe-set regression guard, correct unattended headless Claude-CLI orchestration, per-run cost/token/telemetry + eval-score regression flag + opt-in OTel export"
   author: "speckit-pro"
   repository: "https://github.com/github/spec-kit-pro"
@@ -92,6 +92,10 @@ provides:
     - name: speckit.pro.local-metrics
       file: commands/pro.local-metrics.md
       description: "Read-only dashboard of local-model performance (latency, failure rate) and first-pass review quality (precision, recall) aggregated from .knowledge/metrics/local-metrics.jsonl. Pure Python; never calls Claude or Ollama."
+
+    - name: speckit.pro.analytics
+      file: commands/pro.analytics.md
+      description: "Cross-run analytics dashboard — per-feature rollups (pass rate, score, iterations, cost), failure taxonomy (circuit breaker, watchdog, eval fails, budget/wall-clock stops), cost-per-task analytics, and a composite 0-100 health grade with a cron-able --gate mode. Cross-repo insights loop: `export` a portable JSON bundle (analytics + failures + improvements-ledger learnings, --anonymize supported), `import` bundles from other repos into a rollup and optionally --to-ledger as proposed entries. Pure Python; never calls a model."
 
     # ── Parallel deep-analysis (fan-out engine) ───────────────────────────────
     - name: speckit.pro.scan

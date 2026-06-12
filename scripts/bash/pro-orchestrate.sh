@@ -27,11 +27,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRO_REPORT="$SCRIPT_DIR/pro-report.sh"
 
 # ─── Defaults ────────────────────────────────────────────────────────────────
-MAX_ITERATIONS=20
-CHECKPOINT_FREQUENCY=3
-MODEL="claude-sonnet-4.6"
-SUBAGENT_MODEL=""          # when set, exported as CLAUDE_CODE_SUBAGENT_MODEL
-AGENT_CLI="copilot"
+# Every operational knob honors a SPECKIT_PRO_* env override. Precedence:
+# CLI flag > SPECKIT_PRO_* env > built-in default (flags are parsed below and
+# simply overwrite these values).
+MAX_ITERATIONS="${SPECKIT_PRO_MAX_ITERATIONS:-20}"
+CHECKPOINT_FREQUENCY="${SPECKIT_PRO_CHECKPOINT_FREQUENCY:-3}"
+MODEL="${SPECKIT_PRO_MODEL:-claude-sonnet-4.6}"
+SUBAGENT_MODEL="${SPECKIT_PRO_SUBAGENT_MODEL:-}"  # when set, exported as CLAUDE_CODE_SUBAGENT_MODEL
+AGENT_CLI="${SPECKIT_PRO_AGENT_CLI:-copilot}"
 RESUME=false
 FEATURE_NAME=""
 TASKS_PATH=""
@@ -45,9 +48,28 @@ EFFORT_VERIFICATION="xhigh"
 EFFORT_EXPLORATORY="medium"
 
 # Evaluator (generator/evaluator split — Anthropic harness pattern)
-ENABLE_EVALUATOR=false
-EVAL_THRESHOLD=70       # minimum score (0-100) for PASS
-MAX_REVISIONS=2         # max generator revision attempts per sprint before FAIL
+ENABLE_EVALUATOR="${SPECKIT_PRO_ENABLE_EVALUATOR:-false}"
+EVAL_THRESHOLD="${SPECKIT_PRO_EVAL_THRESHOLD:-70}"  # minimum score (0-100) for PASS
+MAX_REVISIONS="${SPECKIT_PRO_MAX_REVISIONS:-2}"     # max generator revision attempts per sprint before FAIL
+
+# ─── Reliability knobs (v1.24 — survive-the-night hardening) ──────────────────
+ITERATION_TIMEOUT="${SPECKIT_PRO_ITERATION_TIMEOUT:-1800}"  # seconds per agent/evaluator call; 0 = no timeout
+MAX_WALL_SECONDS="${SPECKIT_PRO_MAX_WALL_SECONDS:-}"        # whole-run wall-clock budget; empty = unlimited
+NO_PROGRESS_LIMIT="${SPECKIT_PRO_NO_PROGRESS_LIMIT:-3}"     # CONTINUE iterations w/o checkbox delta before watchdog stop; 0 = off
+# Explicitness trackers for the three knobs above: pro-config loop.* values may
+# only fill the gap when NEITHER a CLI flag NOR a SPECKIT_PRO_* env var set the
+# knob (documented precedence: flag > env > config > default). Flags flip these
+# to 1 in the arg parser; resolve_loop_knobs (called after arg parsing, once
+# PROJECT_ROOT and cfg_get are usable) reads them.
+ITERATION_TIMEOUT_SET=0; [[ -n "${SPECKIT_PRO_ITERATION_TIMEOUT:-}" ]] && ITERATION_TIMEOUT_SET=1
+MAX_WALL_SECONDS_SET=0;  [[ -n "${SPECKIT_PRO_MAX_WALL_SECONDS:-}" ]]  && MAX_WALL_SECONDS_SET=1
+NO_PROGRESS_LIMIT_SET=0; [[ -n "${SPECKIT_PRO_NO_PROGRESS_LIMIT:-}" ]] && NO_PROGRESS_LIMIT_SET=1
+DOCTOR=false                                                # --doctor: print resolved config + environment diagnosis, exit 0
+FORCE_LOCK=false                                            # --force-lock: steal a live lock (only after a confirmed crash)
+WEBHOOK_URL="${SPECKIT_PRO_WEBHOOK_URL:-}"                  # overrides notify.webhook_url from pro-config
+NOTIFY_ON_FAILURE="${SPECKIT_PRO_NOTIFY_ON_FAILURE:-}"      # true/false; empty = read notify.on_failure from pro-config
+NOTIFY_ON_COMPLETE="${SPECKIT_PRO_NOTIFY_ON_COMPLETE:-}"    # true/false; empty = read notify.on_complete from pro-config
+CURRENT_ITERATION=0                                         # global mirror of the loop counter (traps/notify read it)
 
 # ─── Headless CLI controls (claude branch only; copilot/gemini ignore these) ──
 # All default to today's effective behavior — the copilot path injects NONE of
@@ -108,16 +130,25 @@ while [[ $# -gt 0 ]]; do
     --evaluator-model)  EVALUATOR_MODEL="$2";  shift 2 ;;
     --no-shared-model-warn) SHARED_MODEL_WARN=false; shift ;;
     --run-id)           RUN_ID="$2";           shift 2 ;;
+    --iteration-timeout) ITERATION_TIMEOUT="$2"; ITERATION_TIMEOUT_SET=1; shift 2 ;;
+    --max-wall-seconds) MAX_WALL_SECONDS="$2"; MAX_WALL_SECONDS_SET=1; shift 2 ;;
+    --no-progress-limit) NO_PROGRESS_LIMIT="$2"; NO_PROGRESS_LIMIT_SET=1; shift 2 ;;
+    --webhook-url)      WEBHOOK_URL="$2";      shift 2 ;;
+    --doctor)           DOCTOR=true;           shift ;;
+    --force-lock)       FORCE_LOCK=true;       shift ;;
     *)                  echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
-# ─── Derive FEATURE_KNOWLEDGE_DIR ──────────────────────────────────────────────
+# ─── Derive PROJECT_ROOT / FEATURE_KNOWLEDGE_DIR ──────────────────────────────
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 if [[ -z "$FEATURE_KNOWLEDGE_DIR" ]]; then
-  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
   FEATURE_KNOWLEDGE_DIR="$PROJECT_ROOT/.knowledge/features/$FEATURE_NAME"
 fi
-mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts" "$FEATURE_KNOWLEDGE_DIR/evaluations"
+if [[ "$DOCTOR" != "true" ]]; then
+  mkdir -p "$FEATURE_KNOWLEDGE_DIR/contracts" "$FEATURE_KNOWLEDGE_DIR/evaluations" \
+           "$FEATURE_KNOWLEDGE_DIR/logs"
+fi
 
 # ─── Export Sub-Agent Model (when configured) ─────────────────────────────
 # Allows specialist sub-agents to run on a lighter model while the orchestrator
@@ -134,21 +165,29 @@ export SPECKIT_EFFORT_EXECUTION="$EFFORT_EXECUTION"
 export SPECKIT_EFFORT_VERIFICATION="$EFFORT_VERIFICATION"
 export SPECKIT_EFFORT_EXPLORATORY="$EFFORT_EXPLORATORY"
 
-# ─── Validation ──────────────────────────────────────────────────────────────
-if [[ -z "$FEATURE_NAME" || -z "$TASKS_PATH" || -z "$SPEC_DIR" ]]; then
-  echo -e "${RED}Error: --feature-name, --tasks-path, and --spec-dir are required.${RESET}"
-  exit 1
-fi
+# ─── Validation (skipped in --doctor: diagnosis must not require a feature) ───
+if [[ "$DOCTOR" != "true" ]]; then
+  if [[ -z "$FEATURE_NAME" || -z "$TASKS_PATH" || -z "$SPEC_DIR" ]]; then
+    echo -e "${RED}Error: --feature-name, --tasks-path, and --spec-dir are required.${RESET}"
+    exit 1
+  fi
 
-if [[ ! -f "$TASKS_PATH" ]]; then
-  echo -e "${RED}Error: tasks.md not found at: $TASKS_PATH${RESET}"
-  exit 1
+  if [[ ! -f "$TASKS_PATH" ]]; then
+    echo -e "${RED}Error: tasks.md not found at: $TASKS_PATH${RESET}"
+    exit 1
+  fi
 fi
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 PROGRESS_FILE="$FEATURE_KNOWLEDGE_DIR/progress.md"  # persistent audit trail
 SESSION_FILE="$SPEC_DIR/session.md"             # transient pipeline state
 CONTEXT_SUMMARY="$SPEC_DIR/context-summary.md"
+STATUS_FILE="$SPEC_DIR/.pro-status.json"            # file-based status contract (preferred over stdout scrape)
+LOCK_FILE="$FEATURE_KNOWLEDGE_DIR/.lock"            # single-orchestrator concurrency guard
+LOOP_STATE_FILE="$FEATURE_KNOWLEDGE_DIR/loop-state.json"  # orchestrator-owned durable state
+LOGS_DIR="$FEATURE_KNOWLEDGE_DIR/logs"              # per-iteration agent transcripts
+BLOCKED_LOG="$FEATURE_KNOWLEDGE_DIR/blocked.md"     # deferred-blocker journal (fed back to the worker)
+NOTIFY_LOG="$PROJECT_ROOT/.knowledge/metrics/notifications.jsonl"  # always-on event audit trail
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 
@@ -158,12 +197,12 @@ log_warn()    { echo -e "${YELLOW}[Pro] ⚠${RESET} $*"; }
 log_error()   { echo -e "${RED}[Pro] ✗${RESET} $*"; }
 
 banner() {
-  local phase="$1" iter="$2" total="$3"
+  local phase="$1" iter="$2" run_n="$3" completed="$4" total="$5"
   echo ""
   echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════${RESET}"
-  echo -e "${BOLD}${BLUE}  SpecKit Pro │ Loop Iteration ${iter}/${MAX_ITERATIONS}${RESET}"
+  echo -e "${BOLD}${BLUE}  SpecKit Pro │ Loop Iteration ${iter} (run budget ${run_n}/${MAX_ITERATIONS})${RESET}"
   echo -e "${BLUE}  Feature: ${FEATURE_NAME}  │  Phase: ${phase}${RESET}"
-  echo -e "${BLUE}  Progress: ${iter}/${total} tasks${RESET}"
+  echo -e "${BLUE}  Progress: ${completed}/${total} tasks${RESET}"
   echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════${RESET}"
   echo ""
 }
@@ -317,17 +356,361 @@ detect_agent_cli() {
     return 0
   fi
 
-  # Auto-detect fallbacks
+  # Auto-detect fallbacks. Diagnostics MUST go to stderr — this function is
+  # consumed via $(...), and a stdout warning used to be captured INTO the
+  # resolved CLI name, silently routing e.g. copilot through the generic branch.
   for cli in copilot claude gemini codex; do
     if command -v "$cli" &>/dev/null; then
-      log_warn "Agent CLI '$AGENT_CLI' not found; using '$cli'"
+      log_warn "Agent CLI '$AGENT_CLI' not found; using '$cli'" >&2
       echo "$cli"
       return 0
     fi
   done
 
-  log_error "No agent CLI found. Install one of: copilot, claude, gemini, codex"
+  log_error "No agent CLI found. Install one of: copilot, claude, gemini, codex" >&2
   exit 1
+}
+
+# ─── Generic config reader ─────────────────────────────────────────────────────
+# cfg_get <section> <key> — echoes the first value found across the config
+# cascade (local → installed → repo root), empty when unset anywhere. Same
+# zero-dependency awk section walker as commit_artifacts_enabled.
+cfg_get() {
+  local section="$1" key="$2" cfg v
+  for cfg in "$PROJECT_ROOT/.specify/extensions/pro/pro-config.local.yml" \
+             "$PROJECT_ROOT/.specify/extensions/pro/pro-config.yml" \
+             "$PROJECT_ROOT/pro-config.yml"; do
+    [[ -f "$cfg" ]] || continue
+    v=$(awk -v sec="^${section}:" -v key="^[[:space:]]*${key}:" \
+      '$0 ~ sec {f=1; next} f && /^[^ ]/ {f=0} f && $0 ~ key {gsub(/["'"'"']/,"",$2); print $2; exit}' \
+      "$cfg" 2>/dev/null)
+    if [[ -n "$v" ]]; then echo "$v"; return 0; fi
+  done
+  return 0
+}
+
+# ─── Config-backed loop knobs (defect fix: documented keys were dead) ──────────
+# README/pro-config.template.yml document loop.iteration_timeout,
+# loop.max_wall_seconds and loop.no_progress_limit with precedence
+# "flag > env > config > default", but the three values were only ever read from
+# SPECKIT_PRO_* env and CLI flags — the config keys were silently ignored.
+# Called once at the bottom of the script, AFTER arg parsing and AFTER
+# PROJECT_ROOT is derived (cfg_get needs both — same lifecycle as the notify.*
+# resolution inside notify_event). Config only fills the gap when neither a
+# flag nor an env var explicitly set the knob (the *_SET trackers); non-numeric
+# config values are ignored with a warning, keeping the built-in default.
+resolve_loop_knobs() {
+  local v
+  if [[ "${ITERATION_TIMEOUT_SET:-0}" -eq 0 ]]; then
+    v=$(cfg_get loop iteration_timeout)
+    if [[ -n "$v" ]]; then
+      if [[ "$v" =~ ^[0-9]+$ ]]; then
+        ITERATION_TIMEOUT="$v"
+      else
+        log_warn "pro-config loop.iteration_timeout='$v' is not numeric — ignoring (keeping ${ITERATION_TIMEOUT}s)"
+      fi
+    fi
+  fi
+  if [[ "${MAX_WALL_SECONDS_SET:-0}" -eq 0 ]]; then
+    v=$(cfg_get loop max_wall_seconds)
+    if [[ -n "$v" ]]; then
+      if [[ "$v" =~ ^[0-9]+$ ]]; then
+        MAX_WALL_SECONDS="$v"
+      else
+        log_warn "pro-config loop.max_wall_seconds='$v' is not numeric — ignoring (keeping ${MAX_WALL_SECONDS:-unlimited})"
+      fi
+    fi
+  fi
+  if [[ "${NO_PROGRESS_LIMIT_SET:-0}" -eq 0 ]]; then
+    v=$(cfg_get loop no_progress_limit)
+    if [[ -n "$v" ]]; then
+      if [[ "$v" =~ ^[0-9]+$ ]]; then
+        NO_PROGRESS_LIMIT="$v"
+      else
+        log_warn "pro-config loop.no_progress_limit='$v' is not numeric — ignoring (keeping ${NO_PROGRESS_LIMIT})"
+      fi
+    fi
+  fi
+}
+
+# ─── Agent-definition resolution (P0#3 residual fix) ──────────────────────────
+# The old hardcoded `.github/agents/...` path exists in NEITHER the dev repo NOR
+# installed consumers (.extensionignore excludes .github/), so every headless
+# run used to drive a missing file. Resolve across every layout we ship; first
+# readable wins:
+#   1. $SPECKIT_PRO_AGENTS_DIR                  (explicit operator/test override)
+#   2. <script-dir>/../../agents                (installed extension AND dev repo)
+#   3. $PROJECT_ROOT/.specify/extensions/pro/agents
+#   4. $PROJECT_ROOT/agents
+#   5. $PROJECT_ROOT/.github/agents             (legacy layout)
+resolve_agent_file() {
+  local name="$1" d
+  for d in "${SPECKIT_PRO_AGENTS_DIR:-}" \
+           "$SCRIPT_DIR/../../agents" \
+           "$PROJECT_ROOT/.specify/extensions/pro/agents" \
+           "$PROJECT_ROOT/agents" \
+           "$PROJECT_ROOT/.github/agents"; do
+    [[ -n "$d" && -r "$d/$name" ]] && { echo "$d/$name"; return 0; }
+  done
+  return 1
+}
+
+# ─── Per-call timeout (P1#7 — the single cheapest "survive the night" change) ─
+# Prefer coreutils timeout/gtimeout; fall back to a pure-bash watchdog so macOS
+# without coreutils is still covered. is_timeout_rc folds the bin's rc 124 and
+# the fallback's TERM/KILL (143/137) into one timeout verdict.
+TIMEOUT_BIN=""
+command -v timeout >/dev/null 2>&1 && TIMEOUT_BIN="timeout"
+[[ -z "$TIMEOUT_BIN" ]] && command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN="gtimeout"
+
+run_with_timeout() {
+  local secs="$1"; shift
+  if ! [[ "$secs" =~ ^[0-9]+$ ]] || [[ "$secs" -le 0 ]]; then
+    "$@"; return $?
+  fi
+  if [[ -n "$TIMEOUT_BIN" ]]; then
+    "$TIMEOUT_BIN" "$secs" "$@"; return $?
+  fi
+  # Pure-bash fallback: run in background, TERM after the deadline. The watcher
+  # MUST be detached from stdout/stderr — callers run us inside $(...), and a
+  # watcher (or its sleep child) holding the substitution pipe would block the
+  # caller for the full deadline even after the command finished.
+  # Orphan fix: killing a subshell does NOT kill its children, so the old
+  # `( sleep N && kill ... ) &` left one stray full-deadline sleep behind every
+  # time the command finished first. A TERM-trap watcher is NOT enough either:
+  # when SIGTERM is ignored at shell entry (no-tty scheduler/CI harnesses —
+  # empirically reproduced) the trap never fires and the parent hangs on
+  # `wait watcher` for the whole deadline. So the watcher POLLS: it re-checks
+  # the command every second and exits BY ITSELF within ≤1s of the command
+  # finishing — no signal delivery required, nothing outlives the call beyond
+  # one transient `sleep 1`.
+  "$@" &
+  local cmd_pid=$!
+  (
+    deadline=$(( $(date +%s) + secs ))
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+      if [[ "$(date +%s)" -ge "$deadline" ]]; then
+        kill -TERM "$cmd_pid" 2>/dev/null
+        exit 0
+      fi
+      sleep 1
+    done
+  ) >/dev/null 2>&1 &
+  local watcher=$! rc=0
+  wait "$cmd_pid" || rc=$?
+  kill "$watcher" 2>/dev/null || true   # best-effort fast reap; the poller self-exits ≤1s anyway
+  wait "$watcher" 2>/dev/null || true
+  return $rc
+}
+
+is_timeout_rc() { [[ "$1" -eq 124 || "$1" -eq 143 || "$1" -eq 137 ]]; }
+
+json_escape() {
+  # Minimal JSON string escaper: backslash + quote escaped, newlines/tabs → space.
+  # Remaining control bytes 0x00-0x1F (e.g. ANSI ESC \x1b from agent-CLI stderr)
+  # are STRIPPED — raw control characters are invalid inside a JSON string and
+  # used to make json.loads reject notifications.jsonl lines / webhook payloads.
+  # Order matters: \n \r \t are converted to spaces FIRST so they survive; the
+  # delete range deliberately skips \011 \012 \015 (already gone by then).
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\010\013\014\016-\037' \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+truncate_chars() {
+  # truncate_chars <n> — first line of stdin, truncated to <n> CHARACTERS.
+  # `head -c` truncates BYTES and can split a multibyte UTF-8 sequence,
+  # producing invalid UTF-8 inside JSON payloads. macOS/BSD awk (20200816)
+  # substr() is byte-based too, so the portable character-safe primitive here
+  # is bash's own ${var:0:n}, which counts characters under a UTF-8 locale on
+  # both bash 3.2/macOS and bash 4+/Linux (verified with 'café — ümlaut').
+  local n="$1" line=""
+  IFS= read -r line || true   # no trailing newline still populates line
+  printf '%s' "${line:0:n}"
+}
+
+# ─── Notifications (P1#17 — wires the long-documented notify.* config) ────────
+# notify_event <event> <severity:error|warning|info> <detail>
+# Every notable event is ALWAYS appended to .knowledge/metrics/notifications.jsonl
+# (the 3am audit trail), webhook or not. When a webhook URL is configured AND the
+# matching gate is on (failure events → notify.on_failure, info → notify.on_complete),
+# the event is also POSTed as JSON with a Slack-compatible "text" field.
+# Best-effort by contract: notification problems must never abort the loop.
+notify_event() {
+  local event="$1" severity="$2" detail="$3"
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  mkdir -p "$(dirname "$NOTIFY_LOG")" 2>/dev/null || true
+  printf '{"ts":"%s","event":"%s","severity":"%s","feature":"%s","run_id":"%s","iteration":%s,"detail":"%s"}\n' \
+    "$ts" "$(json_escape "$event")" "$severity" "$(json_escape "$FEATURE_NAME")" \
+    "$(json_escape "${RUN_ID:-}")" "${CURRENT_ITERATION:-0}" "$(json_escape "$detail")" \
+    >> "$NOTIFY_LOG" 2>/dev/null || true
+
+  local url gate
+  url="$WEBHOOK_URL"
+  [[ -z "$url" ]] && url=$(cfg_get notify webhook_url)
+  [[ -z "$url" ]] && return 0
+  if [[ "$severity" == "info" ]]; then
+    gate="${NOTIFY_ON_COMPLETE:-$(cfg_get notify on_complete)}"
+  else
+    gate="${NOTIFY_ON_FAILURE:-$(cfg_get notify on_failure)}"
+  fi
+  [[ "$gate" == "true" ]] || return 0
+  if ! command -v curl >/dev/null 2>&1; then
+    log_warn "notify: curl not found — webhook skipped (event logged in $NOTIFY_LOG)" >&2
+    return 0
+  fi
+  local text payload
+  text="[SpecKit Pro] ${event} — feature ${FEATURE_NAME} (iteration ${CURRENT_ITERATION:-0}): ${detail}"
+  payload=$(printf '{"text":"%s","event":"%s","severity":"%s","feature":"%s","run_id":"%s","iteration":%s,"detail":"%s","ts":"%s"}' \
+    "$(json_escape "$text")" "$(json_escape "$event")" "$severity" "$(json_escape "$FEATURE_NAME")" \
+    "$(json_escape "${RUN_ID:-}")" "${CURRENT_ITERATION:-0}" "$(json_escape "$detail")" "$ts")
+  curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+    -d "$payload" "$url" >/dev/null 2>&1 \
+    || log_warn "notify: webhook POST failed (event '$event') — recorded in $NOTIFY_LOG" >&2
+}
+
+# ─── Per-iteration transcript (P1#8a — the missing 3am audit trail) ───────────
+# write_iter_log <name> <signal> <exit> <stdout> <stderr>
+write_iter_log() {
+  local name="$1" signal="$2" exit_code="$3" out="$4" err="$5"
+  [[ -d "$LOGS_DIR" ]] || mkdir -p "$LOGS_DIR" 2>/dev/null || return 0
+  {
+    echo "# $name — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "# signal: $signal | exit: $exit_code | cli: ${RESOLVED_CLI_NAME:-?} | model: $MODEL"
+    echo "## stdout"
+    printf '%s\n' "$out"
+    if [[ -n "$err" ]]; then
+      echo "## stderr"
+      printf '%s\n' "$err"
+    fi
+  } > "$LOGS_DIR/${name}.log" 2>/dev/null || true
+}
+
+# ─── File-based status contract (P1#8b) ───────────────────────────────────────
+# The worker MAY write {"status":"CONTINUE","reason":"..."} to
+# <spec-dir>/.pro-status.json (pro.loop.md instructs it to). A file is an
+# unambiguous channel: it survives CLI cost-footers, mid-answer tag mentions and
+# missing tags. When present and parseable it OVERRIDES the stdout scrape —
+# except BUDGET_STOP, the CLI's own budget brake, which always wins.
+read_status_file() {
+  [[ -f "$STATUS_FILE" ]] || return 0
+  local status reason
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict):
+    sys.exit(0)
+s = str(d.get("status", "")).strip()
+r = str(d.get("reason", "") or "").strip().replace("\n", " ")
+if not s:
+    sys.exit(0)
+print(s + (":" + r if r and s in ("BLOCKED", "ERROR") else ""))
+' "$STATUS_FILE" 2>/dev/null
+  else
+    status=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS_FILE" 2>/dev/null | head -1)
+    reason=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STATUS_FILE" 2>/dev/null | head -1)
+    case "$status" in
+      BLOCKED|ERROR) [[ -n "$reason" ]] && status="$status:$reason" ;;
+    esac
+    printf '%s' "$status"
+  fi
+}
+
+apply_status_file_override() {
+  # apply_status_file_override <current-signal> — echoes the effective signal
+  # and consumes (deletes) the status file. Diagnostics go to stderr: callers
+  # capture stdout via $(...).
+  local current="$1" file_signal
+  file_signal=$(read_status_file)
+  rm -f "$STATUS_FILE" 2>/dev/null || true
+  if [[ -z "$file_signal" ]]; then
+    printf '%s' "$current"
+    return 0
+  fi
+  case "$file_signal" in
+    COMPLETE|CONTINUE|MAX_ITERATIONS|BLOCKED|BLOCKED:*|ERROR|ERROR:*)
+      if [[ "$current" == "BUDGET_STOP" ]]; then
+        printf '%s' "$current"
+      else
+        [[ "$file_signal" != "$current" ]] \
+          && log_info "Status-file contract: '$file_signal' (stdout scrape said '$current')" >&2
+        printf '%s' "$file_signal"
+      fi
+      ;;
+    *)
+      log_warn "Status file holds unknown status '$file_signal' — ignoring" >&2
+      printf '%s' "$current"
+      ;;
+  esac
+}
+
+# ─── Durable loop state (P1#15 — resume must not depend on prose regex) ───────
+# write_loop_state <iteration> <consecutive_failures> <no_progress_streak> \
+#                  <completed> <total> <status>
+write_loop_state() {
+  local tmp="$LOOP_STATE_FILE.tmp.$$"
+  printf '{"iteration":%s,"consecutive_failures":%s,"no_progress_streak":%s,"completed":%s,"total":%s,"status":"%s","run_id":"%s","updated_at":"%s"}\n' \
+    "${1:-0}" "${2:-0}" "${3:-0}" "${4:-0}" "${5:-0}" "$(json_escape "${6:-running}")" \
+    "$(json_escape "${RUN_ID:-}")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$LOOP_STATE_FILE" 2>/dev/null || true
+}
+
+read_loop_state_field() {
+  # read_loop_state_field <key> — echoes the (string or numeric) value, empty when absent.
+  [[ -f "$LOOP_STATE_FILE" ]] || return 0
+  local v
+  v=$(sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$LOOP_STATE_FILE" 2>/dev/null | head -1)
+  [[ -z "$v" ]] && v=$(sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$LOOP_STATE_FILE" 2>/dev/null | head -1)
+  printf '%s' "$v"
+}
+
+# ─── Single-orchestrator lock (P1#16) ─────────────────────────────────────────
+# noclobber-atomic create; contents = "<pid> <iso-ts>". A dead-PID lock is stale
+# and taken over with a warning; a live one aborts (unless --force-lock).
+LOCK_ACQUIRED=0
+acquire_lock() {
+  local attempt holder_pid
+  for attempt in 1 2; do
+    if ( set -C; printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_FILE" ) 2>/dev/null; then
+      LOCK_ACQUIRED=1
+      return 0
+    fi
+    holder_pid=$(awk '{print $1; exit}' "$LOCK_FILE" 2>/dev/null)
+    if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
+      if [[ "$FORCE_LOCK" == "true" ]]; then
+        log_warn "Lock held by live PID $holder_pid — stealing it (--force-lock)."
+        rm -f "$LOCK_FILE" 2>/dev/null || true
+        continue
+      fi
+      log_error "Another orchestrator (PID $holder_pid) holds $LOCK_FILE for feature '$FEATURE_NAME'."
+      log_error "Concurrent loops interleave tasks.md/progress.md writes and double-commit."
+      log_error "Stop the other run first, or pass --force-lock if it is a confirmed crash leftover."
+      exit 1
+    fi
+    log_warn "Stale lock (PID ${holder_pid:-?} not running) — taking over."
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+  done
+  log_error "Could not acquire $LOCK_FILE even after stale-lock takeover — giving up."
+  exit 1
+}
+
+release_lock() {
+  if [[ "${LOCK_ACQUIRED:-0}" -eq 1 ]]; then
+    # Ownership check (defect fix): after a --force-lock steal the ORIGINAL
+    # holder still has LOCK_ACQUIRED=1, and its EXIT trap used to rm the lock
+    # unconditionally — deleting the NEW holder's lock. Only remove when the
+    # lock file's recorded PID is ours; every step is set -e/trap safe.
+    local holder=""
+    holder=$(awk '{print $1; exit}' "$LOCK_FILE" 2>/dev/null) || holder=""
+    if [[ "$holder" == "$$" ]]; then
+      rm -f "$LOCK_FILE" 2>/dev/null || true
+    fi
+    LOCK_ACQUIRED=0
+  fi
 }
 
 # ─── CLI capability profile (contract: cli-invocation.md) ─────────────────────
@@ -598,13 +981,16 @@ print("\t".join(fields))
         else
           local detail
           detail=$(printf '%s' "$result" | tr '\n' ' ')
-          [[ -z "$detail" ]] && detail=$(printf '%s' "$err" | tr '\n' ' ' | head -c 200)
+          [[ -z "$detail" ]] && detail=$(printf '%s' "$err" | tr '\n' ' ' | truncate_chars 200)
           [[ -z "$detail" ]] && detail="agent reported is_error"
           signal="ERROR:$detail"
         fi
       else
-        # Scrape the control tag out of .result.
-        signal=$(printf '%s' "$result" | grep -oE "<$tag>[^<]+</$tag>" | tail -1 | sed 's/<[^>]*>//g')
+        # Scrape the control tag out of .result. Guard the pipeline: under
+        # `set -euo pipefail` a no-match grep (rc 1) fails the $() assignment
+        # and silently killed the orchestrator — the ERROR:no-status-tag path
+        # below was unreachable dead code.
+        signal=$(printf '%s' "$result" | grep -oE "<$tag>[^<]+</$tag>" | tail -1 | sed 's/<[^>]*>//g') || signal=""
         [[ -z "$signal" ]] && signal="ERROR:no-status-tag"
       fi
       PARSE_SIGNAL="$signal"
@@ -615,7 +1001,7 @@ print("\t".join(fields))
     # Distinguish a hard non-zero exit (process crash) from malformed output.
     if [[ "${exit_code:-0}" -ne 0 ]]; then
       local crash
-      crash=$(printf '%s' "$err" | tr '\n' ' ' | head -c 200)
+      crash=$(printf '%s' "$err" | tr '\n' ' ' | truncate_chars 200)
       [[ -z "$crash" ]] && crash="exit $exit_code"
       LAST_SOURCE="json"
       PARSE_SIGNAL="ERROR:$crash"
@@ -628,12 +1014,13 @@ print("\t".join(fields))
 
   # ── Ladder rung 2: text fallback — scrape <tag> over stdout ──
   # Capability gap (no json cap / python3 absent): logged, NOT a failure.
+  # Pipeline guarded: a no-match grep must yield UNKNOWN, not a pipefail death.
   LAST_SOURCE="text-fallback"
-  signal=$(printf '%s' "$out" | grep -oE "<$tag>[^<]+</$tag>" | tail -1 | sed 's/<[^>]*>//g')
+  signal=$(printf '%s' "$out" | grep -oE "<$tag>[^<]+</$tag>" | tail -1 | sed 's/<[^>]*>//g') || signal=""
   if [[ -z "$signal" ]]; then
     if [[ "${exit_code:-0}" -ne 0 ]]; then
       local tdetail
-      tdetail=$(printf '%s' "$err" | tr '\n' ' ' | head -c 200)
+      tdetail=$(printf '%s' "$err" | tr '\n' ' ' | truncate_chars 200)
       [[ -z "$tdetail" ]] && tdetail="exit $exit_code"
       PARSE_SIGNAL="ERROR:$tdetail"
     else
@@ -662,20 +1049,36 @@ run_agent_iteration() {
     prompt_args="$prompt_args $context_flag"
   fi
 
+  # Deferred-blocker journal (P1#17): when previous iterations hit BLOCKED, hand
+  # the worker the journal so it picks a different independent work unit instead
+  # of re-running into the same wall.
+  if [[ -s "$BLOCKED_LOG" ]]; then
+    prompt_args="$prompt_args blocked-log=$BLOCKED_LOG"
+  fi
+
   local agent_output agent_err agent_exit=0
-  local agentfile=".github/agents/speckit.pro.loop.agent.md"
+  local agentfile
+  if ! agentfile=$(resolve_agent_file "speckit.pro.loop.agent.md"); then
+    log_error "Loop agent definition 'speckit.pro.loop.agent.md' not found in any known layout (run --doctor for the search list)."
+    AGENT_SIGNAL="ERROR:agent-definition-missing"
+    return 0
+  fi
+
+  # Consume-before-call: a stale status file from a previous iteration must
+  # never be read as this iteration's verdict.
+  rm -f "$STATUS_FILE" 2>/dev/null || true
 
   # Invoke the agent — run speckit.pro.loop command.
   # Different CLIs have different invocation patterns. Only the claude branch is
   # capability-driven (flags + separate stdout/stderr + defensive JSON parse);
-  # copilot/gemini/generic stay byte-for-byte the existing agent-file invocation
-  # (FR-007) and are routed through the text-fallback parse rung.
+  # copilot/gemini/generic stay the existing agent-file invocation (FR-007) and
+  # are routed through the text-fallback parse rung. EVERY branch runs under the
+  # per-call timeout (P1#7) — one hung CLI must not freeze the overnight run.
   case "$resolved_cli" in
     copilot)
       agent_output=$(
-        "$resolved_cli" agent --model "$MODEL" \
-          ".github/agents/speckit.pro.loop.agent.md" \
-          "$prompt_args" 2>&1
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" agent --model "$MODEL" "$agentfile" "$prompt_args" 2>&1
       ) || agent_exit=$?
       agent_err=""
       ;;
@@ -687,46 +1090,65 @@ run_agent_iteration() {
       local tmp_err
       tmp_err=$(mktemp 2>/dev/null || echo "/tmp/pro-orch-gen-$$.err")
       agent_output=$(
-        "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$prompt_args" 2>"$tmp_err"
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$prompt_args" 2>"$tmp_err"
       ) || agent_exit=$?
       agent_err=$(cat "$tmp_err" 2>/dev/null || echo "")
       rm -f "$tmp_err" 2>/dev/null || true
       ;;
     gemini)
       agent_output=$(
-        "$resolved_cli" run \
-          --model "$MODEL" \
-          ".github/agents/speckit.pro.loop.agent.md" \
-          "$prompt_args" 2>&1
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" run --model "$MODEL" "$agentfile" "$prompt_args" 2>&1
       ) || agent_exit=$?
       agent_err=""
       ;;
     *)
-      # Generic fallback — run with the command as first arg
+      # Generic fallback — run with the agent file as first arg
       agent_output=$(
-        "$resolved_cli" ".github/agents/speckit.pro.loop.agent.md" "$prompt_args" 2>&1
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" "$agentfile" "$prompt_args" 2>&1
       ) || agent_exit=$?
       agent_err=""
       ;;
   esac
 
-  # Normalize to a control signal. parse_agent_result sets PARSE_SIGNAL and the
-  # LAST_* exports IN THIS SHELL (no $(...) — a command substitution would discard
-  # the LAST_* metrics). The caller reads the AGENT_SIGNAL global afterwards.
-  parse_agent_result "$resolved_cli" "$agent_output" "$agent_err" "$agent_exit" "pro-status"
-  AGENT_SIGNAL="$PARSE_SIGNAL"
+  # Normalize to a control signal. A timeout maps straight to ERROR (counts
+  # toward the circuit breaker); otherwise parse_agent_result sets PARSE_SIGNAL
+  # and the LAST_* exports IN THIS SHELL (no $(...) — a command substitution
+  # would discard the LAST_* metrics).
+  if [[ "$ITERATION_TIMEOUT" =~ ^[0-9]+$ && "$ITERATION_TIMEOUT" -gt 0 ]] \
+     && [[ "$agent_exit" -ne 0 ]] && is_timeout_rc "$agent_exit"; then
+    LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
+    LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE="timeout"
+    AGENT_SIGNAL="ERROR:iteration-timeout-${ITERATION_TIMEOUT}s"
+  else
+    parse_agent_result "$resolved_cli" "$agent_output" "$agent_err" "$agent_exit" "pro-status"
+    AGENT_SIGNAL="$PARSE_SIGNAL"
+  fi
+
+  # File contract (P1#8b) beats the stdout scrape; BUDGET_STOP always wins.
+  AGENT_SIGNAL=$(apply_status_file_override "$AGENT_SIGNAL")
+
+  # Persist the transcript (P1#8a) — the audit trail for "what happened at 3am".
+  write_iter_log "iter-${iter}" "$AGENT_SIGNAL" "$agent_exit" "$agent_output" "$agent_err"
 }
 
 # ─── Evaluator Functions ─────────────────────────────────────────────────────
 
 run_evaluator() {
-  local sprint="$1" resolved_cli="$2"
+  local sprint="$1" resolved_cli="$2" revision="${3:-1}"
   # Contract-path alignment (critique R12 / D9): point the evaluator at the SAME
   # path /pro.contract writes and the seal is verified against — the feature
   # knowledge dir, NOT $SPEC_DIR/contracts.
   local contract_path="$FEATURE_KNOWLEDGE_DIR/contracts/sprint-${sprint}.md"
   local eval_output eval_err eval_exit=0
-  local agentfile=".github/agents/speckit.pro.evaluate.agent.md"
+  local agentfile
+  if ! agentfile=$(resolve_agent_file "speckit.pro.evaluate.agent.md"); then
+    log_error "Evaluator agent definition 'speckit.pro.evaluate.agent.md' not found in any known layout (run --doctor)."
+    EVAL_SIGNAL="ERROR:agent-definition-missing"
+    return 0
+  fi
 
   # Read-only evaluator + model independence (D10). Empty → primary model with a
   # SHARED-MODEL disclosure (the grader cannot then be claimed independent).
@@ -747,10 +1169,9 @@ run_evaluator() {
   case "$resolved_cli" in
     copilot)
       eval_output=$(
-        "$resolved_cli" agent --model "$MODEL" \
-          ".github/agents/speckit.pro.evaluate.agent.md" \
-          "$eval_args" 2>&1
-      ) || true
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" agent --model "$MODEL" "$agentfile" "$eval_args" 2>&1
+      ) || eval_exit=$?
       eval_err=""
       ;;
     claude)
@@ -760,23 +1181,34 @@ run_evaluator() {
       local tmp_err
       tmp_err=$(mktemp 2>/dev/null || echo "/tmp/pro-orch-eval-$$.err")
       eval_output=$(
-        "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$eval_args" 2>"$tmp_err"
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$eval_args" 2>"$tmp_err"
       ) || eval_exit=$?
       eval_err=$(cat "$tmp_err" 2>/dev/null || echo "")
       rm -f "$tmp_err" 2>/dev/null || true
       ;;
     *)
       eval_output=$(
-        "$resolved_cli" ".github/agents/speckit.pro.evaluate.agent.md" "$eval_args" 2>&1
-      ) || true
+        run_with_timeout "$ITERATION_TIMEOUT" \
+          "$resolved_cli" "$agentfile" "$eval_args" 2>&1
+      ) || eval_exit=$?
       eval_err=""
       ;;
   esac
 
-  # Normalize via the shared defensive parser. parse_agent_result sets
-  # PARSE_SIGNAL and LAST_* IN THIS SHELL (no $(...)). The caller reads EVAL_SIGNAL.
-  parse_agent_result "$resolved_cli" "$eval_output" "$eval_err" "$eval_exit" "pro-eval"
-  EVAL_SIGNAL="$PARSE_SIGNAL"
+  # Normalize via the shared defensive parser (timeout ⇒ explicit ERROR).
+  # parse_agent_result sets PARSE_SIGNAL and LAST_* IN THIS SHELL (no $(...)).
+  # The caller reads EVAL_SIGNAL.
+  if [[ "$ITERATION_TIMEOUT" =~ ^[0-9]+$ && "$ITERATION_TIMEOUT" -gt 0 ]] \
+     && [[ "$eval_exit" -ne 0 ]] && is_timeout_rc "$eval_exit"; then
+    LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
+    LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE="timeout"
+    EVAL_SIGNAL="ERROR:evaluator-timeout-${ITERATION_TIMEOUT}s"
+  else
+    parse_agent_result "$resolved_cli" "$eval_output" "$eval_err" "$eval_exit" "pro-eval"
+    EVAL_SIGNAL="$PARSE_SIGNAL"
+  fi
+  write_iter_log "iter-${sprint}-eval-r${revision}" "$EVAL_SIGNAL" "$eval_exit" "$eval_output" "$eval_err"
 }
 
 handle_eval_result() {
@@ -804,8 +1236,15 @@ handle_eval_result() {
   case "$verdict" in
     PASS)
       local score="$score_or_issues"
+      # Strict score validation (P1#9): a malformed score ("82/100", "eighty",
+      # empty) must never be silently accepted — the old `2>/dev/null` on the
+      # arithmetic test swallowed exactly that class and passed the sprint.
+      if [[ ! "$score" =~ ^[0-9]{1,3}$ ]]; then
+        log_warn "Evaluator PASS carries malformed score '$score' (want PASS:<0-100>) — requesting revision"
+        return 1  # needs revision — never accept an ungradeable verdict
+      fi
       log_success "Evaluator: PASS (score: ${score}%)"
-      if [[ "$score" -lt "$EVAL_THRESHOLD" ]] 2>/dev/null; then
+      if [[ "$score" -lt "$EVAL_THRESHOLD" ]]; then
         log_warn "Score ${score}% below threshold ${EVAL_THRESHOLD}% — requesting revision"
         return 1  # needs revision
       fi
@@ -829,7 +1268,7 @@ handle_eval_result() {
       log_error "Evaluator output invalid — verdict '$verdict' is not PASS/NEEDS_REVISION/FAIL"
       log_error "Treating as FAIL:evaluator-output-invalid (unverified code never passes by default)"
       [[ -f "$PRO_REPORT" ]] && bash "$PRO_REPORT" event decision "${RUN_ID:--}" \
-        evaluator_verdict fail-invalid-verdict "verdict='${verdict}' tag='$(printf '%s' "$eval_tag" | head -c 120)'" \
+        evaluator_verdict fail-invalid-verdict "verdict='${verdict}' tag='$(printf '%s' "$eval_tag" | truncate_chars 120)'" \
         >/dev/null 2>&1 || true
       update_session "evaluate" "invalid" "Sprint $sprint: evaluator output invalid ($eval_tag)"
       return 2  # hard fail — same handling as FAIL, with its own recorded reason
@@ -860,7 +1299,7 @@ print_progress_bar() {
 # ─── Main Loop ───────────────────────────────────────────────────────────────
 
 main() {
-  local resolved_cli consecutive_failures=0 iteration=1
+  local resolved_cli consecutive_failures=0 iteration=1 no_progress_streak=0
   # Session continuity (D5): first call omits --session-id; we capture the
   # CLI-minted session UUID and --resume it thereafter. RUN_COST_USD is the
   # cumulative per-run budget accumulator (declared at file scope, reset here).
@@ -869,6 +1308,11 @@ main() {
 
   # Resolve the agent CLI
   resolved_cli=$(detect_agent_cli)
+  RESOLVED_CLI_NAME="$resolved_cli"
+
+  # Single-orchestrator guard (P1#16): two loops on the same feature interleave
+  # tasks.md/progress.md writes and double-commit. Must precede any file writes.
+  acquire_lock
 
   # Initialize tracking files
   init_progress_file
@@ -882,19 +1326,34 @@ main() {
     [[ -n "$RUN_ID" ]] && SELF_STAMPED=1
   fi
 
-  # Determine starting iteration (resume mode)
-  if [[ "$RESUME" == "true" && -f "$PROGRESS_FILE" ]]; then
+  # Determine starting iteration (resume mode). Orchestrator-owned state
+  # (loop-state.json, P1#15) is authoritative; the progress.md label regex is
+  # the legacy fallback for runs that predate the state file.
+  if [[ "$RESUME" == "true" ]]; then
     local last_iter
-    # checkpoint_commit persists labels like `iter3` / `circuit-breaker-iter5` to
-    # PROGRESS_FILE (the "Loop Iteration N" banner is stdout-only), so resume must
-    # read the label form that is actually written, not the banner text.
-    last_iter=$(grep -oE 'iter[0-9]+' "$PROGRESS_FILE" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)
-    last_iter=${last_iter:-0}
-    if [[ "$last_iter" -gt 0 ]]; then
+    last_iter=$(read_loop_state_field iteration)
+    if [[ "$last_iter" =~ ^[0-9]+$ && "$last_iter" -gt 0 ]]; then
       iteration=$(( last_iter + 1 ))
-      log_info "Resuming from iteration $iteration (previous: $last_iter)"
+      log_info "Resuming from iteration $iteration (loop-state.json: last completed $last_iter)"
+    elif [[ -f "$PROGRESS_FILE" ]]; then
+      # checkpoint_commit persists labels like `iter3` / `circuit-breaker-iter5` to
+      # PROGRESS_FILE (the "Loop Iteration N" banner is stdout-only), so resume must
+      # read the label form that is actually written, not the banner text.
+      last_iter=$(grep -oE 'iter[0-9]+' "$PROGRESS_FILE" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1) || last_iter=""
+      last_iter=${last_iter:-0}
+      if [[ "$last_iter" -gt 0 ]]; then
+        iteration=$(( last_iter + 1 ))
+        log_info "Resuming from iteration $iteration (progress.md fallback: previous $last_iter)"
+      fi
     fi
   fi
+
+  # Relative iteration budget (P1#15): MAX_ITERATIONS bounds THIS run's
+  # iterations. Resuming at iteration 13 with a budget of 8 runs 13..20 — the
+  # old absolute comparison made exactly that resume a silent no-op.
+  local start_iteration="$iteration"
+  local wall_start
+  wall_start=$(date +%s)
 
   # Check if already complete
   if all_tasks_done; then
@@ -946,17 +1405,32 @@ main() {
   echo ""
 
   # ─── Loop ──────────────────────────────────────────────────────────────────
-  while [[ "$iteration" -le "$MAX_ITERATIONS" ]]; do
+  while (( iteration - start_iteration < MAX_ITERATIONS )); do
+    CURRENT_ITERATION="$iteration"
 
     # Pre-iteration: check if done
     if all_tasks_done; then
       break
     fi
 
+    # ── Wall-clock budget (P1#7) — bound the whole run, not just each call ──
+    if [[ "$MAX_WALL_SECONDS" =~ ^[0-9]+$ && "$MAX_WALL_SECONDS" -gt 0 ]]; then
+      local wall_elapsed=$(( $(date +%s) - wall_start ))
+      if (( wall_elapsed >= MAX_WALL_SECONDS )); then
+        log_warn "Wall-clock budget (${MAX_WALL_SECONDS}s) reached after ${wall_elapsed}s — stopping (clean checkpoint)."
+        read -r completed total <<< "$(count_tasks)"
+        checkpoint_commit "stopped-wall-clock-iter${iteration}" "$completed" "$total"
+        update_session "implement" "stopped_wall_clock" "Wall-clock budget ${MAX_WALL_SECONDS}s reached at iteration $iteration"
+        write_loop_state "$(( iteration - 1 ))" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "stopped_wall_clock"
+        notify_event wall_clock_stop warning "Wall-clock budget ${MAX_WALL_SECONDS}s reached at iteration $iteration (${completed}/${total} tasks)"
+        exit 0
+      fi
+    fi
+
     local counts completed total
     read -r completed total <<< "$(count_tasks)"
 
-    banner "implement" "$iteration" "$total"
+    banner "implement" "$iteration" "$(( iteration - start_iteration + 1 ))" "$completed" "$total"
     print_progress_bar "$completed" "$total"
     echo ""
 
@@ -969,6 +1443,8 @@ main() {
       read -r completed total <<< "$(count_tasks)"
       checkpoint_commit "stopped-budget-iter${iteration}" "$completed" "$total"
       update_session "implement" "stopped_budget" "Cumulative budget cap reached (~${RUN_COST_USD}/${MAX_BUDGET_USD} USD) at iteration $iteration"
+      write_loop_state "$(( iteration - 1 ))" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "stopped_budget"
+      notify_event budget_stop warning "Cumulative budget cap ${MAX_BUDGET_USD} USD reached at iteration $iteration (${completed}/${total} tasks)"
       # Budget-stop marker (no metric flags — no agent call happened this pass).
       LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
       LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE=""
@@ -998,6 +1474,8 @@ main() {
       read -r completed total <<< "$(count_tasks)"
       checkpoint_commit "stopped-budget-iter${iteration}" "$completed" "$total"
       update_session "implement" "stopped_budget" "CLI reported budget stop at iteration $iteration (~${RUN_COST_USD}/${MAX_BUDGET_USD} USD)"
+      write_loop_state "$(( iteration - 1 ))" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "stopped_budget"
+      notify_event budget_stop warning "CLI reported budget stop at iteration $iteration (~${RUN_COST_USD}/${MAX_BUDGET_USD} USD)"
       exit 0
     fi
 
@@ -1007,15 +1485,18 @@ main() {
       while [[ "$revision" -le "$MAX_REVISIONS" ]]; do
         local eval_tag
         report_phase start evaluate
-        run_evaluator "$iteration" "$resolved_cli"
+        run_evaluator "$iteration" "$resolved_cli" "$revision"
         eval_tag="$EVAL_SIGNAL"
         log_info "Evaluator tag: $eval_tag"
         # Telemetry hand-off for the evaluator call (best-effort).
         report_call evaluate "$eval_tag"
         report_phase stop evaluate "$eval_tag"
 
-        handle_eval_result "$eval_tag" "$iteration" "$revision"
-        eval_result=$?
+        # set -e guard: handle_eval_result returns 1 (revision) / 2 (hard fail)
+        # as data, not as failure — a bare call would kill the orchestrator the
+        # moment the evaluator asked for a revision.
+        eval_result=0
+        handle_eval_result "$eval_tag" "$iteration" "$revision" || eval_result=$?
 
         if [[ "$eval_result" -eq 0 ]]; then
           break  # Evaluator passed
@@ -1023,6 +1504,8 @@ main() {
           # Hard fail (incl. rubric tamper) — circuit breaker, un-retryable.
           read -r completed total <<< "$(count_tasks)"
           checkpoint_commit "eval-fail-sprint${iteration}" "$completed" "$total"
+          write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "eval_failed"
+          notify_event eval_hard_fail error "Sprint $iteration failed evaluation: $(printf '%s' "$eval_tag" | truncate_chars 160)"
           report_call evaluate "$eval_tag" --cb-trip
           exit 1
         fi
@@ -1032,21 +1515,28 @@ main() {
         if [[ "$revision" -le "$MAX_REVISIONS" ]]; then
           log_info "Generator revision $revision/$MAX_REVISIONS..."
           local rev_args rev_output rev_err rev_exit=0
-          local rev_agentfile=".github/agents/speckit.pro.loop.agent.md"
+          local rev_agentfile
+          if ! rev_agentfile=$(resolve_agent_file "speckit.pro.loop.agent.md"); then
+            log_error "Loop agent definition missing for revision pass — skipping revision."
+            continue
+          fi
           rev_args="feature=$FEATURE_NAME tasks=$TASKS_PATH spec-dir=$SPEC_DIR"
           rev_args="$rev_args iteration=$iteration max=$MAX_ITERATIONS"
           # Read evaluator feedback from where the evaluator agent actually writes it
           # (FEATURE_KNOWLEDGE_DIR/evaluations — the only evaluations dir created at
           # L119), not SPEC_DIR/evaluations which never exists (revision-loop path fix).
           rev_args="$rev_args revision=$revision eval-feedback=$FEATURE_KNOWLEDGE_DIR/evaluations/sprint-${iteration}.md"
-          # Run generator revision inline (brief pass — fix evaluator issues only)
+          # Run generator revision inline (brief pass — fix evaluator issues only).
+          # Output is CAPTURED and logged on every branch — the old copilot/generic
+          # branches discarded it (&>/dev/null), leaving the revision invisible.
           report_phase start revision
           case "$resolved_cli" in
             copilot)
-              "$resolved_cli" agent --model "$MODEL" \
-                ".github/agents/speckit.pro.loop.agent.md" \
-                "$rev_args" &>/dev/null || true
-              rev_output=""; rev_err=""
+              rev_output=$(
+                run_with_timeout "$ITERATION_TIMEOUT" \
+                  "$resolved_cli" agent --model "$MODEL" "$rev_agentfile" "$rev_args" 2>&1
+              ) || rev_exit=$?
+              rev_err=""
               ;;
             claude)
               # Capability-driven revision pass — separate stdout/stderr + parse.
@@ -1055,19 +1545,25 @@ main() {
               local rev_tmp_err
               rev_tmp_err=$(mktemp 2>/dev/null || echo "/tmp/pro-orch-rev-$$.err")
               rev_output=$(
-                "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$rev_args" 2>"$rev_tmp_err"
+                run_with_timeout "$ITERATION_TIMEOUT" \
+                  "$resolved_cli" "${CLAUDE_FLAGS[@]}" "$rev_args" 2>"$rev_tmp_err"
               ) || rev_exit=$?
               rev_err=$(cat "$rev_tmp_err" 2>/dev/null || echo "")
               rm -f "$rev_tmp_err" 2>/dev/null || true
               ;;
             *)
-              "$resolved_cli" ".github/agents/speckit.pro.loop.agent.md" "$rev_args" &>/dev/null || true
-              rev_output=""; rev_err=""
+              rev_output=$(
+                run_with_timeout "$ITERATION_TIMEOUT" \
+                  "$resolved_cli" "$rev_agentfile" "$rev_args" 2>&1
+              ) || rev_exit=$?
+              rev_err=""
               ;;
           esac
           # Parse revision result, thread session, accumulate cost, hand off
           # the rework telemetry call (best-effort).
           parse_agent_result "$resolved_cli" "$rev_output" "$rev_err" "$rev_exit" "pro-status"
+          log_info "Revision status: $PARSE_SIGNAL"
+          write_iter_log "iter-${iteration}-rev-${revision}" "$PARSE_SIGNAL" "$rev_exit" "$rev_output" "$rev_err"
           [[ -n "${LAST_SESSION_ID:-}" ]] && SESSION_ID="$LAST_SESSION_ID"
           budget_accumulate "${LAST_COST:-0}"
           report_call revision "$PARSE_SIGNAL" --rework
@@ -1091,15 +1587,32 @@ main() {
         log_success "Sprint $iteration complete — continuing..."
         consecutive_failures=0
         ;;
-      BLOCKED:*)
-        local reason="${agent_status#BLOCKED:}"
+      MAX_ITERATIONS)
+        # The worker's own documented safety tag (pro.loop.md) — it used to fall
+        # into the unknown bucket and was "treated as CONTINUE".
+        log_warn "Agent reports MAX_ITERATIONS — honoring its stop request."
+        read -r completed total <<< "$(count_tasks)"
+        checkpoint_commit "agent-max-iterations-iter${iteration}" "$completed" "$total"
+        update_session "implement" "paused" "Agent emitted MAX_ITERATIONS at iteration $iteration"
+        break
+        ;;
+      BLOCKED:*|BLOCKED)
+        local reason="${agent_status#BLOCKED}"
+        reason="${reason#:}"
+        [[ -z "$reason" ]] && reason="(no reason given)"
         log_warn "Task blocked: $reason"
+        # Deferred-blocker journal (P1#17): record the wall — the NEXT
+        # iteration's prompt carries blocked-log=<path> so the worker picks a
+        # different independent work unit instead of re-hitting it.
+        echo "- iteration $iteration ($(date -u +%Y-%m-%dT%H:%M:%SZ)): $reason" >> "$BLOCKED_LOG" 2>/dev/null || true
         consecutive_failures=$(( consecutive_failures + 1 ))
         if [[ "$consecutive_failures" -ge 3 ]]; then
           log_error "Circuit breaker: $consecutive_failures consecutive blocks"
           read -r completed total <<< "$(count_tasks)"
           update_session "implement" "blocked" "Circuit breaker triggered: $reason"
           checkpoint_commit "circuit-breaker-iter${iteration}" "$completed" "$total"
+          write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "circuit_breaker"
+          notify_event circuit_breaker error "3 consecutive BLOCKED — last: $reason (${completed}/${total} tasks)"
           # cb-trip marker (no metric flags — the call's metrics were already sent).
           LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
           LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE=""
@@ -1116,6 +1629,8 @@ main() {
           read -r completed total <<< "$(count_tasks)"
           update_session "implement" "failed" "Circuit breaker: $err_msg"
           checkpoint_commit "circuit-breaker-iter${iteration}" "$completed" "$total"
+          write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "circuit_breaker"
+          notify_event circuit_breaker error "3 consecutive errors — last: $(printf '%s' "$err_msg" | truncate_chars 160)"
           # cb-trip marker (no metric flags — the call's metrics were already sent).
           LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
           LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE=""
@@ -1125,10 +1640,56 @@ main() {
         log_warn "Retrying... ($consecutive_failures/3 failures)"
         ;;
       *)
-        log_warn "Unknown generator status: '$agent_status' — treating as CONTINUE"
-        consecutive_failures=0
+        # P1#6: UNKNOWN counts toward the breaker. A crashed CLI, expired auth
+        # or rate-limit returns no tag at all — the old "treating as CONTINUE"
+        # (plus a failure-counter reset) defanged the breaker exactly when it
+        # was needed most.
+        log_warn "Unknown generator status: '$agent_status' — counting toward circuit breaker"
+        consecutive_failures=$(( consecutive_failures + 1 ))
+        if [[ "$consecutive_failures" -ge 3 ]]; then
+          log_error "Circuit breaker: $consecutive_failures consecutive unparseable statuses"
+          read -r completed total <<< "$(count_tasks)"
+          update_session "implement" "failed" "Circuit breaker: $consecutive_failures consecutive unknown statuses"
+          checkpoint_commit "circuit-breaker-iter${iteration}" "$completed" "$total"
+          write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$completed" "$total" "circuit_breaker"
+          notify_event circuit_breaker error "3 consecutive unknown statuses — last: '$(printf '%s' "$agent_status" | truncate_chars 120)'"
+          LAST_COST="" LAST_IN_TOK="" LAST_OUT_TOK="" LAST_CACHE_R="" LAST_CACHE_C=""
+          LAST_TURNS="" LAST_DUR_MS="" LAST_SESSION_ID="" LAST_SOURCE=""
+          report_call implement "$agent_status" --cb-trip
+          exit 1
+        fi
+        log_warn "Retrying... ($consecutive_failures/3 failures)"
         ;;
     esac
+
+    # ── No-progress watchdog (P1#6) ── the checkbox delta is the one progress
+    # signal the agent can't get wrong by accident. CONTINUE/unknown statuses
+    # with no new [x] for NO_PROGRESS_LIMIT consecutive iterations stop the run
+    # with a diagnostic instead of burning the whole budget doing nothing.
+    local post_completed post_total
+    read -r post_completed post_total <<< "$(count_tasks)"
+    if [[ "$NO_PROGRESS_LIMIT" =~ ^[0-9]+$ && "$NO_PROGRESS_LIMIT" -gt 0 ]]; then
+      if (( post_completed > completed )); then
+        no_progress_streak=0
+      else
+        no_progress_streak=$(( no_progress_streak + 1 ))
+        if (( no_progress_streak >= NO_PROGRESS_LIMIT )); then
+          log_error "Watchdog: no task completed in $no_progress_streak consecutive iterations (stuck at ${post_completed}/${post_total})."
+          log_error "The loop is burning iterations without checkbox progress — stopping for operator review."
+          log_error "Transcripts: $LOGS_DIR/iter-*.log"
+          checkpoint_commit "watchdog-no-progress-iter${iteration}" "$post_completed" "$post_total"
+          update_session "implement" "watchdog_stop" "No checkbox progress for $no_progress_streak iterations"
+          write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$post_completed" "$post_total" "watchdog_stop"
+          notify_event watchdog_no_progress error "No task progress for $no_progress_streak iterations (stuck at ${post_completed}/${post_total} tasks)"
+          [[ -n "$RUN_ID" && -f "$PRO_REPORT" ]] && bash "$PRO_REPORT" event decision "$RUN_ID" \
+            watchdog stop "no checkbox progress for $no_progress_streak iterations" >/dev/null 2>&1 || true
+          exit 1
+        fi
+      fi
+    fi
+
+    # Durable per-iteration state (P1#15) — what resume and post-mortems read.
+    write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$post_completed" "$post_total" "running"
 
     # Periodic checkpoint
     if (( iteration % CHECKPOINT_FREQUENCY == 0 )); then
@@ -1155,6 +1716,8 @@ main() {
 
     checkpoint_commit "implementation-complete" "$final_completed" "$final_total"
     update_session "implement" "completed" "All $final_total tasks complete in $((iteration - 1)) iterations"
+    write_loop_state "$iteration" "$consecutive_failures" "$no_progress_streak" "$final_completed" "$final_total" "completed"
+    notify_event run_complete info "All $final_total tasks complete in $((iteration - 1)) iterations"
     echo ""
     log_info "Next (chat pipeline): run pro.go Phase 7 in the agent —"
     log_info "  /speckit.pro.reconcile → /speckit.pro.local-review → /speckit.pro.evaluate → /speckit.pro.knowledge-sync (sync on PASS)"
@@ -1163,18 +1726,99 @@ main() {
   else
     local remaining=$(( final_total - final_completed ))
     echo ""
-    log_warn "Maximum iterations ($MAX_ITERATIONS) reached. $remaining tasks remain."
+    log_warn "Maximum iterations ($MAX_ITERATIONS this run) reached. $remaining tasks remain."
     print_progress_bar "$final_completed" "$final_total"
     log_info "Resume with: /speckit.pro.resume"
     log_info "Check status: /speckit.pro.status"
 
     checkpoint_commit "max-iterations-reached" "$final_completed" "$final_total"
     update_session "implement" "paused" "$remaining tasks remain after max iterations"
+    write_loop_state "$(( iteration - 1 ))" "$consecutive_failures" "$no_progress_streak" "$final_completed" "$final_total" "paused"
+    notify_event max_iterations warning "$remaining tasks remain after $MAX_ITERATIONS iterations this run"
     exit 1
   fi
 }
 
-# ─── Trap for clean exit on Ctrl+C ───────────────────────────────────────────
+# ─── Doctor mode (P1#13) ──────────────────────────────────────────────────────
+# Prints resolved configuration + environment diagnosis and exits 0. Run it
+# before an overnight run: it answers "will this even start?" without burning
+# a single token.
+run_doctor() {
+  local cli="" ver="" caps="" p f ok=0
+  echo ""
+  echo "SpecKit Pro — orchestrator doctor"
+  echo "─────────────────────────────────────────────"
+  if cli=$(detect_agent_cli 2>/dev/null); then
+    ver=$("$cli" --version 2>/dev/null | head -1) || ver=""
+    caps=$(cli_capabilities "$cli")
+    echo "agent CLI         : $cli${ver:+ ($ver)}"
+    echo "capabilities      : ${caps:-(none — pure agent-file invocation)}"
+  else
+    echo "agent CLI         : NOT FOUND — install one of: copilot, claude, gemini, codex"
+    ok=1
+  fi
+  for f in speckit.pro.loop.agent.md speckit.pro.evaluate.agent.md; do
+    if p=$(resolve_agent_file "$f"); then
+      echo "agent definition  : $f → $p"
+    else
+      echo "agent definition  : $f → MISSING (searched: \$SPECKIT_PRO_AGENTS_DIR, $SCRIPT_DIR/../../agents, .specify/extensions/pro/agents, agents/, .github/agents)"
+      ok=1
+    fi
+  done
+  echo "timeout binary    : ${TIMEOUT_BIN:-(none — pure-bash watchdog fallback)}"
+  echo "python3           : $(command -v python3 >/dev/null 2>&1 && echo present || echo 'MISSING (JSON parse + status file degrade to sed)')"
+  echo "curl              : $(command -v curl >/dev/null 2>&1 && echo present || echo 'missing (webhooks disabled)')"
+  if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "git               : repo at $PROJECT_ROOT (branch $(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo '?'), $(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ') dirty paths)"
+  else
+    echo "git               : NOT a repository — checkpoints will be skipped"
+  fi
+  local cfg found_cfg=""
+  for cfg in "$PROJECT_ROOT/.specify/extensions/pro/pro-config.local.yml" \
+             "$PROJECT_ROOT/.specify/extensions/pro/pro-config.yml" \
+             "$PROJECT_ROOT/pro-config.yml"; do
+    [[ -f "$cfg" ]] && found_cfg="$found_cfg $cfg"
+  done
+  echo "config files      :${found_cfg:- (none — built-in defaults only)}"
+  echo ""
+  echo "resolved knobs (flag > env > config > default)"
+  echo "  max_iterations      = $MAX_ITERATIONS"
+  echo "  checkpoint_frequency= $CHECKPOINT_FREQUENCY"
+  echo "  model               = $MODEL"
+  echo "  agent_cli           = $AGENT_CLI"
+  echo "  iteration_timeout   = ${ITERATION_TIMEOUT}s"
+  echo "  max_wall_seconds    = ${MAX_WALL_SECONDS:-unlimited}"
+  echo "  no_progress_limit   = $NO_PROGRESS_LIMIT"
+  echo "  max_budget_usd      = ${MAX_BUDGET_USD:-unlimited}"
+  echo "  evaluator           = $ENABLE_EVALUATOR (threshold $EVAL_THRESHOLD, max revisions $MAX_REVISIONS)"
+  local wh
+  wh="$WEBHOOK_URL"; [[ -z "$wh" ]] && wh=$(cfg_get notify webhook_url)
+  if [[ -n "$wh" ]]; then
+    echo "  webhook             = configured (${wh%%\?*} — on_failure=${NOTIFY_ON_FAILURE:-$(cfg_get notify on_failure)}, on_complete=${NOTIFY_ON_COMPLETE:-$(cfg_get notify on_complete)})"
+  else
+    echo "  webhook             = not configured (events still logged to .knowledge/metrics/notifications.jsonl)"
+  fi
+  local envs
+  envs=$(env | grep '^SPECKIT_PRO_' | cut -d= -f1 | tr '\n' ' ') || envs=""
+  echo "  env overrides       : ${envs:-(none)}"
+  if [[ -n "$FEATURE_NAME" ]]; then
+    echo ""
+    echo "feature checks ($FEATURE_NAME)"
+    echo "  tasks.md            : $([[ -f "$TASKS_PATH" ]] && echo "$TASKS_PATH" || echo "MISSING ($TASKS_PATH)")"
+    echo "  knowledge dir       : $FEATURE_KNOWLEDGE_DIR"
+    echo "  lock                : $([[ -f "$LOCK_FILE" ]] && echo "HELD ($(cat "$LOCK_FILE" 2>/dev/null | head -1))" || echo free)"
+    echo "  loop-state          : $([[ -f "$LOOP_STATE_FILE" ]] && cat "$LOOP_STATE_FILE" || echo none)"
+  fi
+  echo ""
+  if [[ "$ok" -eq 0 ]]; then
+    echo "verdict: READY"
+  else
+    echo "verdict: NOT READY — fix the MISSING items above before an unattended run"
+  fi
+  return 0
+}
+
+# ─── Traps: clean exit on Ctrl+C, SIGTERM, and any exit path ──────────────────
 # Close a self-stamped run on ANY exit (success, failure, circuit-breaker, budget,
 # or Ctrl-C) so the terminal path always produces a run-report + runs.jsonl line.
 # Runs at most once; no-op when --run-id was supplied (the caller owns finish then).
@@ -1185,7 +1829,34 @@ finish_self_stamped() {
     --max-iterations "$MAX_ITERATIONS" --progress-file "$PROGRESS_FILE" \
     --no-stdout >/dev/null 2>&1 || true
 }
-trap finish_self_stamped EXIT
+
+on_exit() {
+  finish_self_stamped
+  release_lock
+}
+
+on_term() {
+  # SIGTERM (kill, systemd stop, CI cancel) — leave a final session entry +
+  # notification instead of vanishing without a trace (P1#14).
+  echo ""
+  log_warn "SIGTERM received — recording final state. Run /speckit.pro.resume to continue."
+  update_session "implement" "terminated" "SIGTERM at iteration ${CURRENT_ITERATION:-?}" 2>/dev/null || true
+  notify_event terminated error "SIGTERM at iteration ${CURRENT_ITERATION:-?}" 2>/dev/null || true
+  exit 143
+}
+
+trap on_exit EXIT
+trap on_term TERM
 trap 'echo ""; log_warn "Interrupted by user. Run /speckit.pro.resume to continue."; exit 130' INT
+
+# Fill flag/env gaps in the loop knobs from pro-config (flag > env > config >
+# default). Must run after arg parsing + PROJECT_ROOT derivation and before
+# doctor/main consume the values.
+resolve_loop_knobs
+
+if [[ "$DOCTOR" == "true" ]]; then
+  run_doctor
+  exit 0
+fi
 
 main "$@"

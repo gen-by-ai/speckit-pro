@@ -71,13 +71,20 @@ PY
 [[ -z "$PIDS" ]] && { fanout_warn "no portions to dispatch"; exit 0; }
 
 # ── Resolve worker command ────────────────────────────────────────────────────
-# Default agent def path: installed location, else repo source.
+# Default agent def: same cascade as pro-orchestrate.sh resolve_agent_file —
+# the old `.github/agents/` default ships in NEITHER the dev repo NOR installed
+# consumers (.extensionignore excludes .github/), and the bare `agents/`
+# fallback only exists in the dev repo. First readable candidate wins.
 if [[ -z "$AGENT_DEF" ]]; then
-  if [[ -f ".github/agents/speckit.pro.scan-worker.agent.md" ]]; then
-    AGENT_DEF=".github/agents/speckit.pro.scan-worker.agent.md"
-  else
-    AGENT_DEF="agents/speckit.pro.scan-worker.agent.md"
-  fi
+  _fanout_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  for _cand in "${SPECKIT_PRO_AGENTS_DIR:-}/speckit.pro.scan-worker.agent.md" \
+               "$SCRIPT_DIR/../../agents/speckit.pro.scan-worker.agent.md" \
+               "$_fanout_root/.specify/extensions/pro/agents/speckit.pro.scan-worker.agent.md" \
+               "$_fanout_root/agents/speckit.pro.scan-worker.agent.md" \
+               "$_fanout_root/.github/agents/speckit.pro.scan-worker.agent.md"; do
+    if [[ -r "$_cand" ]]; then AGENT_DEF="$_cand"; break; fi
+  done
+  [[ -z "$AGENT_DEF" ]] && AGENT_DEF="agents/speckit.pro.scan-worker.agent.md"  # last resort (recorded as failed by the ledger)
 fi
 [[ -z "$CLI_BIN" ]] && CLI_BIN="$(fanout_detect_substrate cli "" >/dev/null 2>&1; for b in copilot claude gemini codex; do command -v "$b" >/dev/null 2>&1 && { echo "$b"; break; }; done)"
 
